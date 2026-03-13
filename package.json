@@ -1,0 +1,11 @@
+{
+  "name": "tryfox-companion-extension",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Firefox extension that converts supported Treeherder URLs into TryFox deep-link QR codes.",
+  "scripts": {
+    "test": "node --test tests/treeherder-url.test.cjs",
+    "build": "./scripts/build-extension.sh",
+    "build:ci": "./scripts/build-extension.sh --ci"
+  }
+}
