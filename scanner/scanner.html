@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Scan Android QR</title>
+    <link rel="stylesheet" href="scanner.css">
+  </head>
+  <body>
+    <main class="scanner_shell">
+      <header class="scanner_header">
+        <h1>Scan Android QR</h1>
+        <p>Open TryFox on Android, choose receive from desktop, then scan the QR code shown on your phone.</p>
+      </header>
+
+      <section class="scanner_view">
+        <video id="camera_preview" class="camera_preview" autoplay muted playsinline></video>
+        <canvas id="scan_canvas" hidden></canvas>
+      </section>
+
+      <section class="scanner_result" aria-live="polite">
+        <div id="scanner_status" class="scanner_status">Starting camera...</div>
+        <div id="device_details" class="device_details" hidden></div>
+      </section>
+
+      <div class="scanner_actions">
+        <button id="connect_button" class="primary_button" type="button" disabled>Connect and send</button>
+        <button id="rescan_button" class="secondary_button" type="button" hidden>Scan again</button>
+      </div>
+    </main>
+
+    <script src="jsQR.js"></script>
+    <script src="../src/pairing/androidLanPayload.js"></script>
+    <script src="scanner.js"></script>
+  </body>
+</html>

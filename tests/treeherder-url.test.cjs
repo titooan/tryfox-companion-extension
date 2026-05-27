@@ -19,13 +19,29 @@ function loadTranslator() {
   return context.globalThis.tryfoxTreeherderUrl;
 }
 
-const { toTryfoxDeepLink } = loadTranslator();
+const { parseTryfoxJobUrl, toTryfoxDeepLink } = loadTranslator();
+
+function plainObject(value) {
+  return JSON.parse(JSON.stringify(value));
+}
 
 test("translates a Treeherder revision URL", () => {
   assert.equal(
     toTryfoxDeepLink("https://treeherder.mozilla.org/jobs?repo=try&revision=673673d375640a9229404d6f7efc30943bad8b9d"),
     "tryfox://jobs?repo=try&revision=673673d375640a9229404d6f7efc30943bad8b9d"
   );
+});
+
+test("parses a Treeherder revision URL into a Try payload", () => {
+  const sourceUrl = "https://treeherder.mozilla.org/jobs?repo=try&revision=673673d375640a9229404d6f7efc30943bad8b9d";
+
+  assert.deepEqual(plainObject(parseTryfoxJobUrl(sourceUrl)), {
+    sourceUrl,
+    tryfoxDeepLink: "tryfox://jobs?repo=try&revision=673673d375640a9229404d6f7efc30943bad8b9d",
+    repo: "try",
+    revision: "673673d375640a9229404d6f7efc30943bad8b9d",
+    author: null,
+  });
 });
 
 test("translates a hash-routed Treeherder revision URL", () => {
@@ -65,6 +81,18 @@ test("translates author URLs and drops repo", () => {
       `tryfox://jobs?author=${author}`
     );
   }
+});
+
+test("parses author URLs into a Try payload", () => {
+  const sourceUrl = "https://treeherder.mozilla.org/jobs?repo=try&author=tthibaud%40mozilla.com";
+
+  assert.deepEqual(plainObject(parseTryfoxJobUrl(sourceUrl)), {
+    sourceUrl,
+    tryfoxDeepLink: "tryfox://jobs?author=tthibaud%40mozilla.com",
+    repo: null,
+    revision: null,
+    author: "tthibaud@mozilla.com",
+  });
 });
 
 test("returns null for non-treeherder URLs", () => {

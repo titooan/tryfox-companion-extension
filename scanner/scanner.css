@@ -1,0 +1,94 @@
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: #f7f7fa;
+  color: #15141a;
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.scanner_shell {
+  width: min(720px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 24px 16px 32px;
+}
+
+.scanner_header {
+  margin-bottom: 16px;
+}
+
+.scanner_header h1 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.scanner_header p {
+  margin: 0;
+  color: #4a4a4f;
+}
+
+.scanner_view {
+  overflow: hidden;
+  border: 1px solid #d7d7db;
+  border-radius: 8px;
+  background: #15141a;
+  aspect-ratio: 4 / 3;
+}
+
+.camera_preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scanner_result {
+  min-height: 64px;
+  padding: 14px 0;
+}
+
+.scanner_status {
+  font-weight: 600;
+}
+
+.device_details {
+  margin-top: 8px;
+  color: #4a4a4f;
+  overflow-wrap: anywhere;
+}
+
+.scanner_actions {
+  display: flex;
+  gap: 8px;
+}
+
+.primary_button,
+.secondary_button {
+  min-height: 34px;
+  border: 1px solid #d7d7db;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  padding: 7px 12px;
+}
+
+.primary_button {
+  border-color: #0060df;
+  background: #0060df;
+  color: #ffffff;
+}
+
+.secondary_button {
+  background: #ffffff;
+  color: #15141a;
+}
+
+.primary_button:disabled,
+.secondary_button:disabled {
+  border-color: #d7d7db;
+  background: #f0f0f4;
+  color: #8f8f9d;
+  cursor: default;
+}

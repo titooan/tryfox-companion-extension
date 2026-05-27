@@ -4,8 +4,11 @@
   "version": "0.0.1",
   "description": "Firefox extension that converts supported Treeherder URLs into TryFox deep-link QR codes.",
   "scripts": {
-    "test": "node --test tests/treeherder-url.test.cjs",
+    "test": "node --test tests/*.test.cjs",
     "build": "./scripts/build-extension.sh",
     "build:ci": "./scripts/build-extension.sh --ci"
+  },
+  "dependencies": {
+    "jsqr": "^1.4.0"
   }
 }

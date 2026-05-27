@@ -1,10 +1,10 @@
 "use strict";
 
 const [ QR_VERSION_MIN, QR_VERSION_MAX ] = [ 1, 40 ];
-const DEFAULT_ERROR_CORRECTION_LEVEL = 'L'; // 'L', 'M', 'Q', 'H'
-const [ DEFAULT_CELL_SIZE, DEFAULT_MARGIN_SIZE] = [ 4, 8 ];
+const DEFAULT_ERROR_CORRECTION_LEVEL = "L"; // "L", "M", "Q", "H"
+const [ DEFAULT_CELL_SIZE, DEFAULT_MARGIN_SIZE ] = [ 4, 8 ];
 
-function generateQR(text, cellSize=1, margin=0) {
+function generateQR(text, cellSize = 1, margin = 0) {
   for (let i = QR_VERSION_MIN; i <= QR_VERSION_MAX; ++i) {
     let qr = qrcode(i, DEFAULT_ERROR_CORRECTION_LEVEL);
     qr.addData(text);
@@ -15,14 +15,14 @@ function generateQR(text, cellSize=1, margin=0) {
     }
     return qr.createImgTag(cellSize, margin);
   }
-  throw "QR code not available";
+  throw new Error("QR code not available");
 }
 
 function renderQRCode(text, cellSize) {
   let tag = generateQR(text, cellSize, DEFAULT_MARGIN_SIZE);
-  let doc = new DOMParser().parseFromString(tag, 'text/html');
-  let img_el = doc.getElementsByTagName('img')[0];
-  let qrcodeImg = document.getElementById('qrcode_img');
+  let doc = new DOMParser().parseFromString(tag, "text/html");
+  let img_el = doc.getElementsByTagName("img")[0];
+  let qrcodeImg = document.getElementById("qrcode_img");
   qrcodeImg.src = img_el.src;
 }
 
@@ -141,7 +141,7 @@ function fallbackCopyText(text) {
   return Promise.resolve();
 }
 
-function showCopiedTooltip(button) {
+function showCopiedTooltip() {
   const feedback = document.getElementById("copy_feedback");
   if (!feedback) {
     return;
@@ -160,73 +160,196 @@ function showCopiedTooltip(button) {
   }, 1200);
 }
 
-browser.tabs.query({active: true, currentWindow: true}).then(tabs => {
-  const originUrl = tabs[0].url;
-  const deepLink = tryfoxTreeherderUrl.toTryfoxDeepLink(tabs[0].url);
+function sendBackgroundMessage(type, detail = {}) {
+  return browser.runtime.sendMessage({ type, ...detail });
+}
 
-  if (!deepLink) {
-    return;
+async function ensureEndpointPermission(endpointPermissionPattern) {
+  if (!endpointPermissionPattern) {
+    return false;
   }
 
-  browser.storage.local.get('cellSize').then(result => {
+  const permission = {
+    origins: [endpointPermissionPattern],
+  };
+  const hasPermission = await browser.permissions.contains(permission);
+  if (hasPermission) {
+    return true;
+  }
+
+  return browser.permissions.request(permission);
+}
+
+browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+  const originUrl = tabs[0] && tabs[0].url ? tabs[0].url : "";
+  const tryPayload = tryfoxTreeherderUrl.parseTryfoxJobUrl(originUrl);
+  const deepLink = tryPayload ? tryPayload.tryfoxDeepLink : null;
+
+  browser.storage.local.get("cellSize").then(result => {
     const cellSize = parseInt(result.cellSize) || DEFAULT_CELL_SIZE;
-    const modeHttpsButton = document.getElementById('mode_https');
-    const modeDeeplinkButton = document.getElementById('mode_deeplink');
-    const activeLinkHeader = document.getElementById('active_link_header');
-    const activeLinkText = document.getElementById('active_link_text');
-    const copyActiveLinkButton = document.getElementById('copy_active_link');
-    const copyQRCodeButton = document.getElementById('copy_qrcode');
-    const saveQRCodeButton = document.getElementById('save_qrcode');
+    const container = document.getElementById("qrcode_container");
+    const modeHttpsButton = document.getElementById("mode_https");
+    const modeDeeplinkButton = document.getElementById("mode_deeplink");
+    const modeAndroidButton = document.getElementById("mode_android");
+    const urlPanel = document.getElementById("url_panel");
+    const androidPanel = document.getElementById("android_panel");
+    const urlQrContent = document.getElementById("url_qr_content");
+    const unsupportedMessage = document.getElementById("unsupported_message");
+    const activeLinkHeader = document.getElementById("active_link_header");
+    const activeLinkText = document.getElementById("active_link_text");
+    const copyActiveLinkButton = document.getElementById("copy_active_link");
+    const copyQRCodeButton = document.getElementById("copy_qrcode");
+    const saveQRCodeButton = document.getElementById("save_qrcode");
+    const androidStatus = document.getElementById("android_status");
+    const androidDeviceDetails = document.getElementById("android_device_details");
+    const androidUnsupportedMessage = document.getElementById("android_unsupported_message");
+    const sendToAndroidButton = document.getElementById("send_to_android");
+    const scanAndroidQrButton = document.getElementById("scan_android_qr");
+    const forgetAndroidButton = document.getElementById("forget_android");
     const qrCodeFilename = getQRCodeFilename(originUrl);
+    let androidState = null;
+
+    modeDeeplinkButton.disabled = !deepLink;
+    modeHttpsButton.disabled = !deepLink;
 
     function getModeData(mode) {
-      if (mode === 'https') {
+      if (mode === "https") {
         return {
-          header: 'Origin Link',
+          header: "Origin Link",
           text: originUrl,
         };
       }
 
       return {
-        header: 'TryFox Deeplink',
+        header: "TryFox Deeplink",
         text: deepLink,
       };
     }
 
+    function setModeButtons(mode) {
+      modeHttpsButton.classList.toggle("is-active", mode === "https");
+      modeDeeplinkButton.classList.toggle("is-active", mode === "deeplink");
+      modeAndroidButton.classList.toggle("is-active", mode === "android");
+    }
+
+    function renderAndroidState(state) {
+      androidState = state;
+      const device = state && state.device;
+      const hasTryPayload = Boolean(tryPayload);
+
+      if (device) {
+        androidStatus.textContent = state.status || `Paired with ${device.deviceName}`;
+        androidDeviceDetails.textContent = `${device.deviceName} (${device.endpoint})`;
+        androidDeviceDetails.hidden = false;
+      } else {
+        androidStatus.textContent = "No Android device paired.";
+        androidDeviceDetails.hidden = true;
+      }
+
+      androidUnsupportedMessage.hidden = hasTryPayload;
+      sendToAndroidButton.disabled = !device || !hasTryPayload;
+      sendToAndroidButton.textContent = device ? `Send to ${device.deviceName}` : "Send to Android";
+      forgetAndroidButton.disabled = !device;
+    }
+
+    function refreshAndroidState() {
+      return sendBackgroundMessage("GET_ANDROID_STATE")
+        .then(renderAndroidState)
+        .catch(() => {
+          androidStatus.textContent = "Android state unavailable.";
+        });
+    }
+
     function setActiveMode(mode) {
-      const useHttps = mode === 'https';
+      if ((mode === "deeplink" || mode === "https") && !deepLink) {
+        mode = "android";
+      }
+
+      setModeButtons(mode);
+      urlPanel.hidden = mode === "android";
+      androidPanel.hidden = mode !== "android";
+
+      if (mode === "android") {
+        refreshAndroidState();
+        return;
+      }
+
       const modeData = getModeData(mode);
-      modeHttpsButton.classList.toggle('is-active', useHttps);
-      modeDeeplinkButton.classList.toggle('is-active', !useHttps);
+      unsupportedMessage.hidden = true;
+      urlQrContent.hidden = false;
       activeLinkHeader.textContent = modeData.header;
       activeLinkText.textContent = modeData.text;
-      copyActiveLinkButton.setAttribute('aria-label', `Copy ${modeData.header.toLowerCase()}`);
-      copyActiveLinkButton.setAttribute('title', `Copy ${modeData.header.toLowerCase()}`);
+      copyActiveLinkButton.setAttribute("aria-label", `Copy ${modeData.header.toLowerCase()}`);
+      copyActiveLinkButton.setAttribute("title", `Copy ${modeData.header.toLowerCase()}`);
       copyActiveLinkButton.dataset.copyValue = modeData.text;
       renderQRCode(modeData.text, cellSize);
     }
 
-    copyActiveLinkButton.addEventListener('click', event => {
+    copyActiveLinkButton.addEventListener("click", event => {
       copyText(event.currentTarget.dataset.copyValue)
         .catch(() => {})
         .finally(() => showCopiedTooltip());
     });
-    copyQRCodeButton.addEventListener('click', event => {
+    copyQRCodeButton.addEventListener("click", event => {
       event.preventDefault();
       copyQRCodeImage()
         .catch(() => {})
         .finally(() => showCopiedTooltip());
     });
-    saveQRCodeButton.addEventListener('click', event => {
+    saveQRCodeButton.addEventListener("click", event => {
       event.preventDefault();
       saveQRCodeImage(qrCodeFilename)
         .then(() => showCopiedTooltip())
         .catch(() => {});
     });
-    modeHttpsButton.addEventListener('click', () => setActiveMode('https'));
-    modeDeeplinkButton.addEventListener('click', () => setActiveMode('deeplink'));
-    setActiveMode('deeplink');
-    document.getElementById('qrcode_container').hidden = false;
-  });
+    modeHttpsButton.addEventListener("click", () => setActiveMode("https"));
+    modeDeeplinkButton.addEventListener("click", () => setActiveMode("deeplink"));
+    modeAndroidButton.addEventListener("click", () => setActiveMode("android"));
+    scanAndroidQrButton.addEventListener("click", () => {
+      sendBackgroundMessage("OPEN_ANDROID_SCANNER", { tryPayload })
+        .catch(() => {
+          androidStatus.textContent = "Failed to open Android QR scanner.";
+        });
+    });
+    sendToAndroidButton.addEventListener("click", async () => {
+      if (!tryPayload || !androidState || !androidState.device) {
+        return;
+      }
 
+      sendToAndroidButton.disabled = true;
+      androidStatus.textContent = "Sending to Android...";
+
+      try {
+        const allowed = await ensureEndpointPermission(androidState.device.endpointPermissionPattern);
+        if (!allowed) {
+          androidStatus.textContent = "Permission was not granted for the Android endpoint.";
+          return;
+        }
+
+        const result = await sendBackgroundMessage("SEND_TRY_TO_ANDROID", { tryPayload });
+        renderAndroidState(result.state);
+      } catch (error) {
+        androidStatus.textContent = error.message || "Failed to send to Android. Scan Android QR again if its IP changed.";
+      } finally {
+        sendToAndroidButton.disabled = !androidState || !androidState.device || !tryPayload;
+      }
+    });
+    forgetAndroidButton.addEventListener("click", () => {
+      sendBackgroundMessage("FORGET_ANDROID_DEVICE")
+        .then(renderAndroidState)
+        .catch(() => {
+          androidStatus.textContent = "Failed to forget Android device.";
+        });
+    });
+
+    if (deepLink) {
+      setActiveMode("deeplink");
+    } else {
+      unsupportedMessage.hidden = false;
+      urlQrContent.hidden = true;
+      setActiveMode("android");
+    }
+
+    container.hidden = false;
+  });
 });

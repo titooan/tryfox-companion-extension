@@ -28,7 +28,7 @@
     };
   }
 
-  function toTryfoxDeepLink(rawUrl) {
+  function parseTryfoxJobUrl(rawUrl) {
     let url;
 
     try {
@@ -57,18 +57,36 @@
       }
 
       deepLinkParams.set("revision", revision);
-      return `tryfox://jobs?${deepLinkParams.toString()}`;
+      return {
+        sourceUrl: rawUrl,
+        tryfoxDeepLink: `tryfox://jobs?${deepLinkParams.toString()}`,
+        repo: repo || null,
+        revision,
+        author: null,
+      };
     }
 
     const author = params.get("author");
     if (author) {
-      return `tryfox://jobs?${new URLSearchParams({ author }).toString()}`;
+      return {
+        sourceUrl: rawUrl,
+        tryfoxDeepLink: `tryfox://jobs?${new URLSearchParams({ author }).toString()}`,
+        repo: null,
+        revision: null,
+        author,
+      };
     }
 
     return null;
   }
 
+  function toTryfoxDeepLink(rawUrl) {
+    const tryfoxJob = parseTryfoxJobUrl(rawUrl);
+    return tryfoxJob ? tryfoxJob.tryfoxDeepLink : null;
+  }
+
   return {
+    parseTryfoxJobUrl,
     toTryfoxDeepLink,
   };
 });

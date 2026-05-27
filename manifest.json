@@ -10,6 +10,7 @@
     "64": "icons/tryfox.png"
   },
   "permissions": ["activeTab", "downloads", "storage"],
+  "optional_permissions": ["http://*/*"],
   "browser_specific_settings": {
     "gecko": {
       "id": "tryfox-companion@titouan",
@@ -28,6 +29,15 @@
     },
     "default_title": "fxqrl",
     "default_popup": "popup/fxqrl.html"
+  },
+
+  "background": {
+    "scripts": [
+      "src/pairing/androidLanPayload.js",
+      "src/pairing/lanAuth.js",
+      "src/background/lanClient.js",
+      "src/background/background.js"
+    ]
   },
 
   "options_ui": {
