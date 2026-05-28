@@ -3,6 +3,7 @@
 const video = document.getElementById("camera_preview");
 const canvas = document.getElementById("scan_canvas");
 const statusText = document.getElementById("scanner_status");
+const scannerResult = document.querySelector(".scanner_result");
 const deviceDetails = document.getElementById("device_details");
 const connectButton = document.getElementById("connect_button");
 const rescanButton = document.getElementById("rescan_button");
@@ -10,6 +11,8 @@ const rescanButton = document.getElementById("rescan_button");
 let stream = null;
 let animationFrameId = null;
 let decodedPayload = null;
+let invalidQrMessageTimeoutId = null;
+let hasInvalidQrWarning = false;
 
 const {
   getEndpointPermissionPattern,
@@ -18,6 +21,65 @@ const {
 
 function setStatus(message) {
   statusText.textContent = message;
+}
+
+function setResultState(state) {
+  for (const stateName of ["is-ready", "is-success", "is-error"]) {
+    scannerResult.classList.remove(stateName);
+    statusText.classList.remove(stateName);
+  }
+
+  if (state) {
+    scannerResult.classList.add(state);
+    statusText.classList.add(state);
+  }
+}
+
+function clearInvalidQrWarningTimer() {
+  if (invalidQrMessageTimeoutId) {
+    clearTimeout(invalidQrMessageTimeoutId);
+    invalidQrMessageTimeoutId = null;
+  }
+}
+
+function showInvalidQrWarning(message) {
+  clearInvalidQrWarningTimer();
+  hasInvalidQrWarning = true;
+  setResultState("is-error");
+  setStatus(message);
+}
+
+function scheduleInvalidQrWarningClear() {
+  if (!hasInvalidQrWarning || invalidQrMessageTimeoutId) {
+    return;
+  }
+
+  invalidQrMessageTimeoutId = setTimeout(() => {
+    hasInvalidQrWarning = false;
+    invalidQrMessageTimeoutId = null;
+    setResultState(null);
+    setStatus("Point the camera at the Android QR code.");
+  }, 3000);
+}
+
+function clearInvalidQrWarning() {
+  clearInvalidQrWarningTimer();
+  hasInvalidQrWarning = false;
+}
+
+function setConnectedStatus(message) {
+  clearInvalidQrWarning();
+  setResultState("is-success");
+  setStatus(message);
+  connectButton.textContent = "Connected";
+  connectButton.classList.add("is-connected");
+  connectButton.disabled = true;
+}
+
+function resetConnectedStatus() {
+  setResultState(null);
+  connectButton.textContent = "Connect";
+  connectButton.classList.remove("is-connected");
 }
 
 function stopCamera() {
@@ -36,6 +98,8 @@ function stopCamera() {
 
 async function startCamera() {
   decodedPayload = null;
+  clearInvalidQrWarning();
+  resetConnectedStatus();
   connectButton.disabled = true;
   rescanButton.hidden = true;
   deviceDetails.hidden = true;
@@ -71,10 +135,12 @@ function scanFrame() {
   const code = jsQR(imageData.data, imageData.width, imageData.height);
 
   if (code) {
+    clearInvalidQrWarningTimer();
     handleDecodedQr(code.data);
     return;
   }
 
+  scheduleInvalidQrWarningClear();
   animationFrameId = requestAnimationFrame(scanFrame);
 }
 
@@ -84,13 +150,15 @@ function handleDecodedQr(rawText) {
   try {
     payload = parseAndroidLanPayload(rawText);
   } catch (error) {
-    setStatus(error.message || "QR code is not a Tryfox Android receiver.");
+    showInvalidQrWarning(error.message || "QR code is not a Tryfox Android receiver.");
     animationFrameId = requestAnimationFrame(scanFrame);
     return;
   }
 
+  clearInvalidQrWarning();
   decodedPayload = payload;
   stopCamera();
+  setResultState("is-ready");
   setStatus(`Ready to connect to ${payload.deviceName}.`);
   deviceDetails.textContent = payload.endpoint;
   deviceDetails.hidden = false;
@@ -100,16 +168,9 @@ function handleDecodedQr(rawText) {
 
 async function ensureEndpointPermission(endpoint) {
   const originPattern = getEndpointPermissionPattern(endpoint);
-  const permission = {
+  return browser.permissions.request({
     origins: [originPattern],
-  };
-
-  const hasPermission = await browser.permissions.contains(permission);
-  if (hasPermission) {
-    return true;
-  }
-
-  return browser.permissions.request(permission);
+  });
 }
 
 connectButton.addEventListener("click", async () => {
@@ -117,17 +178,14 @@ connectButton.addEventListener("click", async () => {
     return;
   }
 
-  connectButton.disabled = true;
-  setStatus("Requesting permission for the Android endpoint...");
-
   try {
     const allowed = await ensureEndpointPermission(decodedPayload.endpoint);
     if (!allowed) {
       setStatus("Permission was not granted for the Android endpoint.");
-      connectButton.disabled = false;
       return;
     }
 
+    connectButton.disabled = true;
     setStatus("Sending to Android...");
     const result = await browser.runtime.sendMessage({
       type: "ANDROID_QR_SCANNED",
@@ -135,9 +193,9 @@ connectButton.addEventListener("click", async () => {
     });
 
     if (result && result.sent) {
-      setStatus("Sent to Android.");
+      setConnectedStatus("Connected. The Tryfox revision was sent to Android.");
     } else {
-      setStatus("Android device saved.");
+      setConnectedStatus("Connected. Android is ready to receive Tryfox revisions.");
     }
   } catch (error) {
     setStatus(error.message || "Failed to send to Android.");

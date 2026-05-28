@@ -169,15 +169,9 @@ async function ensureEndpointPermission(endpointPermissionPattern) {
     return false;
   }
 
-  const permission = {
+  return browser.permissions.request({
     origins: [endpointPermissionPattern],
-  };
-  const hasPermission = await browser.permissions.contains(permission);
-  if (hasPermission) {
-    return true;
-  }
-
-  return browser.permissions.request(permission);
+  });
 }
 
 browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
@@ -185,7 +179,7 @@ browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
   const tryPayload = tryfoxTreeherderUrl.parseTryfoxJobUrl(originUrl);
   const deepLink = tryPayload ? tryPayload.tryfoxDeepLink : null;
 
-  browser.storage.local.get("cellSize").then(result => {
+  browser.storage.local.get("cellSize").then(async result => {
     const cellSize = parseInt(result.cellSize) || DEFAULT_CELL_SIZE;
     const container = document.getElementById("qrcode_container");
     const modeHttpsButton = document.getElementById("mode_https");
@@ -250,6 +244,7 @@ browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
       sendToAndroidButton.disabled = !device || !hasTryPayload;
       sendToAndroidButton.textContent = device ? `Send to ${device.deviceName}` : "Send to Android";
       forgetAndroidButton.disabled = !device;
+      return state;
     }
 
     function refreshAndroidState() {
@@ -316,9 +311,6 @@ browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
         return;
       }
 
-      sendToAndroidButton.disabled = true;
-      androidStatus.textContent = "Sending to Android...";
-
       try {
         const allowed = await ensureEndpointPermission(androidState.device.endpointPermissionPattern);
         if (!allowed) {
@@ -326,6 +318,8 @@ browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
           return;
         }
 
+        sendToAndroidButton.disabled = true;
+        androidStatus.textContent = "Sending to Android...";
         const result = await sendBackgroundMessage("SEND_TRY_TO_ANDROID", { tryPayload });
         renderAndroidState(result.state);
       } catch (error) {
@@ -342,12 +336,25 @@ browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
         });
     });
 
-    if (deepLink) {
-      setActiveMode("deeplink");
-    } else {
-      unsupportedMessage.hidden = false;
-      urlQrContent.hidden = true;
-      setActiveMode("android");
+    try {
+      const initialAndroidState = await refreshAndroidState();
+      if (initialAndroidState && initialAndroidState.device) {
+        setActiveMode("android");
+      } else if (deepLink) {
+        setActiveMode("deeplink");
+      } else {
+        unsupportedMessage.hidden = false;
+        urlQrContent.hidden = true;
+        setActiveMode("android");
+      }
+    } catch (error) {
+      if (deepLink) {
+        setActiveMode("deeplink");
+      } else {
+        unsupportedMessage.hidden = false;
+        urlQrContent.hidden = true;
+        setActiveMode("android");
+      }
     }
 
     container.hidden = false;
