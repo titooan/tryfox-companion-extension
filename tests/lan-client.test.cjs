@@ -9,6 +9,7 @@ if (!globalThis.crypto) {
 
 const {
   createTryRevisionMessage,
+  pingAndroidDevice,
   sendTryRevisionToAndroid,
 } = require("../src/background/lanClient.js");
 
@@ -25,6 +26,7 @@ const tryPayload = {
   repo: "try",
   revision: "abcdef",
   author: null,
+  title: "Bug 123456",
 };
 
 test("creates Try revision messages", () => {
@@ -43,6 +45,7 @@ test("creates Try revision messages", () => {
     repo: "try",
     revision: "abcdef",
     author: null,
+    title: "Bug 123456",
   });
 });
 
@@ -72,7 +75,40 @@ test("sends signed HTTP requests to Android", async () => {
   assert.match(calls[0].options.headers["X-Tryfox-Nonce"], /^[A-Za-z0-9_-]+$/);
   assert.match(calls[0].options.headers["X-Tryfox-Signature"], /^[A-Za-z0-9_-]+$/);
   assert.equal(JSON.parse(calls[0].options.body).revision, "abcdef");
+  assert.equal(JSON.parse(calls[0].options.body).title, "Bug 123456");
   assert.equal(response.ok, true);
+});
+
+test("serializes absent labels as null before signing", () => {
+  const message = createTryRevisionMessage({
+    ...tryPayload,
+    title: "   ",
+  }, {
+    messageId: "message_2",
+    sentAt: 1760000000001,
+  });
+
+  assert.equal(message.title, null);
+});
+
+test("pings Android receiver endpoints", async () => {
+  const calls = [];
+  const response = await pingAndroidDevice({
+    device,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: false,
+        status: 405,
+      };
+    },
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, device.endpoint);
+  assert.equal(calls[0].options.method, "GET");
+  assert.equal(calls[0].options.cache, "no-store");
 });
 
 test("throws useful errors for Android error responses", async () => {

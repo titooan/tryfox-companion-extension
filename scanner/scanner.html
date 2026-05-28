@@ -9,7 +9,17 @@
     <main class="scanner_shell">
       <header class="scanner_header">
         <h1>Scan Android QR</h1>
-        <p>Open TryFox on Android, choose receive from desktop, then scan the QR code shown on your phone.</p>
+        <div class="scanner_info_block">
+          <svg class="scanner_info_icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 1.5A6.5 6.5 0 1 1 8 14.5 6.5 6.5 0 0 1 8 1.5Zm0 1A5.5 5.5 0 1 0 8 13.5 5.5 5.5 0 0 0 8 2.5Zm0 4a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0v-3A.75.75 0 0 1 8 6.5Zm0-2.25a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5Z"/>
+          </svg>
+          <ul>
+            <li>Open TryFox on Android</li>
+            <li>Long press the camera icon</li>
+            <li>Click "Start receiver"</li>
+            <li>Then scan the QR code shown on your phone</li>
+          </ul>
+        </div>
       </header>
 
       <section class="scanner_view">
@@ -23,9 +33,11 @@
       </section>
 
       <div class="scanner_actions">
-        <button id="connect_button" class="primary_button" type="button" disabled>Connect</button>
+        <button id="connection_status_button" class="primary_button" type="button" disabled hidden>Connecting</button>
         <button id="rescan_button" class="secondary_button" type="button" hidden>Scan again</button>
+        <button id="close_tab_button" class="secondary_button" type="button" hidden>Close tab</button>
       </div>
+      <div id="close_countdown" class="close_countdown" aria-live="polite" hidden></div>
     </main>
 
     <script src="jsQR.js"></script>

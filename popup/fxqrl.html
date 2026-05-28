@@ -51,17 +51,19 @@
 
 			<div id="android_panel" hidden>
 				<div class="android_status_block">
-					<div class="link_header">Android</div>
 					<div id="android_status" class="android_status">No Android device paired.</div>
 				</div>
-				<div id="android_device_details" class="android_device_details" hidden></div>
 				<div id="android_unsupported_message" class="empty_message" hidden>
 					Open a supported Treeherder jobs page before sending to Android.
 				</div>
-				<div class="android_actions">
-					<button id="send_to_android" class="primary_button" type="button" disabled>Send to Android</button>
-					<button id="scan_android_qr" class="secondary_button" type="button">Scan Android QR</button>
-					<button id="forget_android" class="secondary_button" type="button" disabled>Forget device</button>
+				<button id="scan_android_qr" class="secondary_button icon_text_button" type="button">
+					<img class="button_icon" src="../icons/scan-qrcode.svg" alt="" aria-hidden="true">
+					<span>Connect new device</span>
+				</button>
+				<div id="android_device_list" class="android_device_list"></div>
+				<div id="android_actions" class="android_actions" hidden>
+					<input id="android_send_title" class="android_title_input" type="text" placeholder="Optional label">
+					<button id="send_to_android" class="primary_button" type="button" disabled>Send</button>
 				</div>
 			</div>
 		</div>

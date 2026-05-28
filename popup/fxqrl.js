@@ -164,13 +164,51 @@ function sendBackgroundMessage(type, detail = {}) {
   return browser.runtime.sendMessage({ type, ...detail });
 }
 
+function getEndpointPermissionPattern(endpoint) {
+  const endpointUrl = new URL(endpoint);
+  return `${endpointUrl.protocol}//${endpointUrl.hostname}/*`;
+}
+
+function publicCachedAndroidDevice(device) {
+  return {
+    deviceId: device.deviceId,
+    deviceName: device.deviceName,
+    endpoint: device.endpoint,
+    endpointPermissionPattern: getEndpointPermissionPattern(device.endpoint),
+    selected: device.selected !== false,
+    status: device.lastPingStatus || "unknown",
+    lastPingedAt: device.lastPingedAt || null,
+    pairedAt: device.pairedAt,
+    lastSeenAt: device.lastSeenAt || null,
+  };
+}
+
+async function getCachedAndroidState() {
+  const stored = await browser.storage.local.get([
+    "tryfoxAndroidDevice",
+    "tryfoxAndroidDevices",
+  ]);
+  const storedDevices = Array.isArray(stored.tryfoxAndroidDevices)
+    ? stored.tryfoxAndroidDevices
+    : stored.tryfoxAndroidDevice
+      ? [{ ...stored.tryfoxAndroidDevice, selected: true }]
+      : [];
+
+  return {
+    status: storedDevices.length ? "Checking Android devices..." : "No Android device paired.",
+    devices: storedDevices.map(publicCachedAndroidDevice),
+    device: storedDevices[0] ? publicCachedAndroidDevice(storedDevices[0]) : null,
+    hasDevice: storedDevices.length > 0,
+  };
+}
+
 async function ensureEndpointPermission(endpointPermissionPattern) {
-  if (!endpointPermissionPattern) {
+  if (!endpointPermissionPattern || Array.isArray(endpointPermissionPattern) && !endpointPermissionPattern.length) {
     return false;
   }
 
-  return browser.permissions.request({
-    origins: [endpointPermissionPattern],
+  return browser.permissions.contains({
+    origins: Array.isArray(endpointPermissionPattern) ? endpointPermissionPattern : [endpointPermissionPattern],
   });
 }
 
@@ -195,13 +233,17 @@ browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
     const copyQRCodeButton = document.getElementById("copy_qrcode");
     const saveQRCodeButton = document.getElementById("save_qrcode");
     const androidStatus = document.getElementById("android_status");
-    const androidDeviceDetails = document.getElementById("android_device_details");
     const androidUnsupportedMessage = document.getElementById("android_unsupported_message");
+    const androidDeviceList = document.getElementById("android_device_list");
+    const androidSendTitleInput = document.getElementById("android_send_title");
+    const androidActions = document.getElementById("android_actions");
     const sendToAndroidButton = document.getElementById("send_to_android");
     const scanAndroidQrButton = document.getElementById("scan_android_qr");
-    const forgetAndroidButton = document.getElementById("forget_android");
     const qrCodeFilename = getQRCodeFilename(originUrl);
     let androidState = null;
+    const sendHighlights = new Map();
+    let androidRefreshIntervalId = null;
+    let isSendingToAndroid = false;
 
     modeDeeplinkButton.disabled = !deepLink;
     modeHttpsButton.disabled = !deepLink;
@@ -228,31 +270,162 @@ browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
 
     function renderAndroidState(state) {
       androidState = state;
-      const device = state && state.device;
+      const devices = state && Array.isArray(state.devices) ? state.devices : [];
+      const connectedDevices = devices.filter(device => device.status === "connected");
+      const selectedConnectedDevices = connectedDevices.filter(device => device.selected !== false);
       const hasTryPayload = Boolean(tryPayload);
 
-      if (device) {
-        androidStatus.textContent = state.status || `Paired with ${device.deviceName}`;
-        androidDeviceDetails.textContent = `${device.deviceName} (${device.endpoint})`;
-        androidDeviceDetails.hidden = false;
+      androidDeviceList.textContent = "";
+
+      if (devices.length) {
+        androidStatus.textContent = `${devices.length} Android device${devices.length === 1 ? "" : "s"} paired.`;
+        for (const device of devices) {
+          androidDeviceList.appendChild(createAndroidDeviceCard(device));
+        }
       } else {
         androidStatus.textContent = "No Android device paired.";
-        androidDeviceDetails.hidden = true;
       }
 
+      androidActions.hidden = !devices.length;
       androidUnsupportedMessage.hidden = hasTryPayload;
-      sendToAndroidButton.disabled = !device || !hasTryPayload;
-      sendToAndroidButton.textContent = device ? `Send to ${device.deviceName}` : "Send to Android";
-      forgetAndroidButton.disabled = !device;
+      sendToAndroidButton.disabled = isSendingToAndroid || !hasTryPayload || !selectedConnectedDevices.length;
       return state;
+    }
+
+    function createAndroidDeviceCard(device) {
+      const isConnected = device.status === "connected";
+      const isChecking = device.status === "checking";
+      const sendHighlight = sendHighlights.get(device.deviceId);
+      const card = document.createElement("div");
+      card.className = [
+        "android_device_card",
+        isConnected ? "" : "is-disabled",
+        sendHighlight === "success" ? "is-send-success" : "",
+        sendHighlight === "failure" ? "is-send-failure" : "",
+        sendHighlight === "sending" ? "is-sending" : "",
+      ].filter(Boolean).join(" ");
+
+      const label = document.createElement("label");
+      label.className = "android_device_option";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.className = "android_device_checkbox";
+      checkbox.checked = isConnected && device.selected !== false;
+      checkbox.disabled = !isConnected;
+      checkbox.addEventListener("change", () => {
+        sendBackgroundMessage("SET_ANDROID_DEVICE_SELECTED", {
+          deviceId: device.deviceId,
+          selected: checkbox.checked,
+        })
+          .then(renderAndroidState)
+          .catch(() => {
+            androidStatus.textContent = "Failed to update Android device selection.";
+            checkbox.checked = !checkbox.checked;
+          });
+      });
+
+      const text = document.createElement("span");
+      const name = document.createElement("span");
+      name.className = "android_device_name";
+      name.textContent = device.deviceName;
+
+      const state = document.createElement("span");
+      state.className = "android_device_state";
+      state.textContent = isConnected ? "Connected" : isChecking ? "Checking..." : "Disconnected";
+
+      text.appendChild(name);
+      text.appendChild(state);
+      label.appendChild(checkbox);
+      label.appendChild(text);
+
+      const deleteButton = document.createElement("button");
+      deleteButton.className = "android_device_delete";
+      deleteButton.type = "button";
+      deleteButton.setAttribute("aria-label", `Forget ${device.deviceName}`);
+      deleteButton.setAttribute("title", `Forget ${device.deviceName}`);
+      deleteButton.innerHTML = `<svg class="android_device_delete_icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 2a1 1 0 0 0-1 1v.5H3a.5.5 0 0 0 0 1h.5v8A1.5 1.5 0 0 0 5 14h6a1.5 1.5 0 0 0 1.5-1.5v-8h.5a.5.5 0 0 0 0-1h-2.5V3a1 1 0 0 0-1-1h-3Zm3 1v.5h-3V3h3Zm-5 1.5h7v8a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5v-8Zm2 1.5a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 1 .5-.5Zm3 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 1 .5-.5Z"/></svg>`;
+      deleteButton.addEventListener("click", () => {
+        sendBackgroundMessage("FORGET_ANDROID_DEVICE", { deviceId: device.deviceId })
+          .then(renderAndroidState)
+          .catch(() => {
+            androidStatus.textContent = "Failed to forget Android device.";
+          });
+      });
+
+      card.appendChild(label);
+      card.appendChild(deleteButton);
+      return card;
     }
 
     function refreshAndroidState() {
       return sendBackgroundMessage("GET_ANDROID_STATE")
         .then(renderAndroidState)
         .catch(() => {
-          androidStatus.textContent = "Android state unavailable.";
+          renderAndroidState(androidState || {
+            status: "Android state unavailable.",
+            devices: [],
+          });
         });
+    }
+
+    function startAndroidRefreshLoop() {
+      if (androidRefreshIntervalId) {
+        return;
+      }
+
+      androidRefreshIntervalId = setInterval(() => {
+        if (!androidPanel.hidden) {
+          refreshAndroidState();
+        }
+      }, 2000);
+    }
+
+    function withDeviceStatuses(state, statusByDeviceId) {
+      if (!state || !Array.isArray(state.devices)) {
+        return state;
+      }
+
+      return {
+        ...state,
+        devices: state.devices.map(device => {
+          const nextStatus = statusByDeviceId.get(device.deviceId);
+          if (!nextStatus) {
+            return device;
+          }
+
+          return {
+            ...device,
+            status: nextStatus,
+          };
+        }),
+      };
+    }
+
+    function setSendHighlights(results, stateToRender = androidState) {
+      for (const result of results) {
+        sendHighlights.set(result.deviceId, result.ok ? "success" : "failure");
+        setTimeout(() => {
+          sendHighlights.delete(result.deviceId);
+          if (androidState) {
+            renderAndroidState(androidState);
+          }
+        }, 5000);
+      }
+
+      if (stateToRender) {
+        renderAndroidState(stateToRender);
+      }
+    }
+
+    function setSendingHighlights(devices) {
+      for (const device of devices) {
+        sendHighlights.set(device.deviceId, "sending");
+      }
+
+      if (androidState) {
+        renderAndroidState(androidState);
+      }
     }
 
     function setActiveMode(mode) {
@@ -265,7 +438,11 @@ browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
       androidPanel.hidden = mode !== "android";
 
       if (mode === "android") {
+        if (androidState) {
+          renderAndroidState(androidState);
+        }
         refreshAndroidState();
+        startAndroidRefreshLoop();
         return;
       }
 
@@ -306,39 +483,65 @@ browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
           androidStatus.textContent = "Failed to open Android QR scanner.";
         });
     });
+    androidSendTitleInput.addEventListener("keydown", event => {
+      if (event.key !== "Enter" || sendToAndroidButton.disabled) {
+        return;
+      }
+
+      event.preventDefault();
+      sendToAndroidButton.click();
+    });
     sendToAndroidButton.addEventListener("click", async () => {
-      if (!tryPayload || !androidState || !androidState.device) {
+      const devices = androidState && Array.isArray(androidState.devices) ? androidState.devices : [];
+      const selectedDevices = devices.filter(device => device.status === "connected" && device.selected !== false);
+      const sendTitle = androidSendTitleInput.value.trim();
+
+      if (!tryPayload || !selectedDevices.length) {
         return;
       }
 
       try {
-        const allowed = await ensureEndpointPermission(androidState.device.endpointPermissionPattern);
+        const origins = [...new Set(selectedDevices.map(device => device.endpointPermissionPattern))];
+        const allowed = await ensureEndpointPermission(origins);
         if (!allowed) {
           androidStatus.textContent = "Permission was not granted for the Android endpoint.";
           return;
         }
 
+        isSendingToAndroid = true;
         sendToAndroidButton.disabled = true;
-        androidStatus.textContent = "Sending to Android...";
-        const result = await sendBackgroundMessage("SEND_TRY_TO_ANDROID", { tryPayload });
-        renderAndroidState(result.state);
-      } catch (error) {
-        androidStatus.textContent = error.message || "Failed to send to Android. Scan Android QR again if its IP changed.";
-      } finally {
-        sendToAndroidButton.disabled = !androidState || !androidState.device || !tryPayload;
-      }
-    });
-    forgetAndroidButton.addEventListener("click", () => {
-      sendBackgroundMessage("FORGET_ANDROID_DEVICE")
-        .then(renderAndroidState)
-        .catch(() => {
-          androidStatus.textContent = "Failed to forget Android device.";
+        setSendingHighlights(selectedDevices);
+        const result = await sendBackgroundMessage("SEND_TRY_TO_ANDROID", {
+          tryPayload: {
+            ...tryPayload,
+            title: sendTitle || null,
+          },
+          deviceIds: selectedDevices.map(device => device.deviceId),
         });
+        setSendHighlights(result.results || [], result.state);
+      } catch (error) {
+        const failedResults = selectedDevices.map(device => ({
+          deviceId: device.deviceId,
+          ok: false,
+        }));
+        const disconnectedDeviceIds = new Map(
+          selectedDevices.map(device => [device.deviceId, "disconnected"])
+        );
+        setSendHighlights(failedResults, withDeviceStatuses(androidState, disconnectedDeviceIds));
+        refreshAndroidState();
+      } finally {
+        isSendingToAndroid = false;
+        const devices = androidState && Array.isArray(androidState.devices) ? androidState.devices : [];
+        const selectedDevices = devices.filter(device => device.status === "connected" && device.selected !== false);
+        sendToAndroidButton.disabled = !tryPayload || !selectedDevices.length;
+      }
     });
 
     try {
-      const initialAndroidState = await refreshAndroidState();
-      if (initialAndroidState && initialAndroidState.device) {
+      const initialAndroidState = await getCachedAndroidState();
+      renderAndroidState(initialAndroidState);
+
+      if (initialAndroidState.devices && initialAndroidState.devices.length) {
         setActiveMode("android");
       } else if (deepLink) {
         setActiveMode("deeplink");
@@ -358,5 +561,10 @@ browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
     }
 
     container.hidden = false;
+    window.addEventListener("pagehide", () => {
+      if (androidRefreshIntervalId) {
+        clearInterval(androidRefreshIntervalId);
+      }
+    });
   });
 });

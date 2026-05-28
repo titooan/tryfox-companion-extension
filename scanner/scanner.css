@@ -23,9 +23,32 @@ body {
   line-height: 1.2;
 }
 
-.scanner_header p {
+.scanner_info_block {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+  border: 1px solid #8ac2ff;
+  border-radius: 8px;
+  background: #eef6ff;
+  color: #15141a;
+  padding: 12px;
+}
+
+.scanner_info_icon {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  fill: #0060df;
+}
+
+.scanner_info_block ul {
   margin: 0;
-  color: #4a4a4f;
+  padding-left: 18px;
+}
+
+.scanner_info_block li + li {
+  margin-top: 3px;
 }
 
 .scanner_view {
@@ -105,6 +128,12 @@ body {
   gap: 8px;
 }
 
+.close_countdown {
+  margin-top: 8px;
+  color: #4a4a4f;
+  font-size: 12px;
+}
+
 .primary_button,
 .secondary_button {
   min-height: 34px;
@@ -117,6 +146,13 @@ body {
 }
 
 .primary_button {
+  border-color: #0060df;
+  background: #0060df;
+  color: #ffffff;
+}
+
+.primary_button.is-connecting,
+.primary_button.is-connecting:disabled {
   border-color: #0060df;
   background: #0060df;
   color: #ffffff;

@@ -35,8 +35,8 @@ body {
 #android_panel[hidden],
 #unsupported_message[hidden],
 #url_qr_content[hidden],
-#android_device_details[hidden],
-#android_unsupported_message[hidden] {
+#android_unsupported_message[hidden],
+#android_actions[hidden] {
   display: none;
 }
 
@@ -208,23 +208,136 @@ body {
 }
 
 .android_status_block {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .android_status {
-  color: #15141a;
-  font-size: 13px;
+  color: #4a4a4f;
+  font-size: 12px;
 }
 
-.android_device_details {
-  margin-bottom: 12px;
-  color: #4a4a4f;
-  overflow-wrap: anywhere;
+.android_device_list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+
+.android_device_card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #d7d7db;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px;
+}
+
+.android_device_card.is-disabled {
+  background: #f7f7fa;
+  color: #8f8f9d;
+}
+
+.android_device_card.is-send-success {
+  border-color: #0b7a34;
+  box-shadow: 0 0 0 1px rgba(11, 122, 52, 0.25);
+}
+
+.android_device_card.is-send-failure {
+  border-color: #c50042;
+  box-shadow: 0 0 0 1px rgba(197, 0, 66, 0.22);
+}
+
+.android_device_card.is-sending {
+  border-color: #0060df;
+  box-shadow: 0 0 0 1px rgba(0, 96, 223, 0.22);
+}
+
+.android_device_option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.android_device_checkbox {
+  margin: 2px 0 0;
+}
+
+.android_device_name {
+  display: block;
+  color: #15141a;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.android_device_card.is-disabled .android_device_name {
+  color: #6f6f78;
+}
+
+.android_device_state {
+  display: block;
+  color: #0b7a34;
+  font-size: 12px;
+}
+
+.android_device_card.is-disabled .android_device_state {
+  color: #8f8f9d;
+}
+
+.android_device_delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #5b5b66;
+  cursor: pointer;
+  padding: 0;
+}
+
+.android_device_delete:hover {
+  border-color: #d7d7db;
+  background: #f0f0f4;
+  color: #c50042;
+}
+
+.android_device_delete_icon {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
 }
 
 .android_actions {
-  display: grid;
+  display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.android_title_input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 32px;
+  box-sizing: border-box;
+  border: 1px solid #d7d7db;
+  border-radius: 6px;
+  color: #15141a;
+  font: inherit;
+  padding: 7px 10px;
+}
+
+.android_title_input::placeholder {
+  color: #8f8f9d;
+}
+
+.android_actions .primary_button {
+  flex: 0 0 auto;
+  width: auto;
 }
 
 .primary_button,
@@ -256,6 +369,13 @@ body {
 
 .secondary_button:hover {
   background: #f0f0f4;
+}
+
+.icon_text_button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .primary_button:disabled,

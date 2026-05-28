@@ -5,14 +5,21 @@ const canvas = document.getElementById("scan_canvas");
 const statusText = document.getElementById("scanner_status");
 const scannerResult = document.querySelector(".scanner_result");
 const deviceDetails = document.getElementById("device_details");
-const connectButton = document.getElementById("connect_button");
+const connectionStatusButton = document.getElementById("connection_status_button");
 const rescanButton = document.getElementById("rescan_button");
+const closeTabButton = document.getElementById("close_tab_button");
+const closeCountdown = document.getElementById("close_countdown");
+
+const INVALID_QR_CONFIRMATION_FRAMES = 3;
 
 let stream = null;
 let animationFrameId = null;
 let decodedPayload = null;
 let invalidQrMessageTimeoutId = null;
 let hasInvalidQrWarning = false;
+let closeCountdownIntervalId = null;
+let invalidQrCandidateText = null;
+let invalidQrCandidateCount = 0;
 
 const {
   getEndpointPermissionPattern,
@@ -49,7 +56,25 @@ function showInvalidQrWarning(message) {
   setStatus(message);
 }
 
+function trackInvalidQrCandidate(rawText) {
+  if (rawText === invalidQrCandidateText) {
+    invalidQrCandidateCount += 1;
+  } else {
+    invalidQrCandidateText = rawText;
+    invalidQrCandidateCount = 1;
+  }
+
+  return invalidQrCandidateCount >= INVALID_QR_CONFIRMATION_FRAMES;
+}
+
+function clearInvalidQrCandidate() {
+  invalidQrCandidateText = null;
+  invalidQrCandidateCount = 0;
+}
+
 function scheduleInvalidQrWarningClear() {
+  clearInvalidQrCandidate();
+
   if (!hasInvalidQrWarning || invalidQrMessageTimeoutId) {
     return;
   }
@@ -64,22 +89,86 @@ function scheduleInvalidQrWarningClear() {
 
 function clearInvalidQrWarning() {
   clearInvalidQrWarningTimer();
+  clearInvalidQrCandidate();
   hasInvalidQrWarning = false;
+}
+
+function updateCloseCountdown(secondsLeft) {
+  closeCountdown.textContent = `Tab will be closed in ${secondsLeft} second${secondsLeft === 1 ? "" : "s"}.`;
+}
+
+async function closeCurrentTab() {
+  try {
+    const currentTab = await browser.tabs.getCurrent();
+    if (currentTab && typeof currentTab.id === "number") {
+      await browser.tabs.remove(currentTab.id);
+      return;
+    }
+  } catch (error) {
+    // Fall back to window.close below.
+  }
+
+  window.close();
+}
+
+function clearCloseCountdown() {
+  if (closeCountdownIntervalId) {
+    clearInterval(closeCountdownIntervalId);
+    closeCountdownIntervalId = null;
+  }
+
+  closeCountdown.hidden = true;
+  closeCountdown.textContent = "";
+}
+
+function startCloseCountdown() {
+  let secondsLeft = 5;
+
+  clearCloseCountdown();
+  closeCountdown.hidden = false;
+  updateCloseCountdown(secondsLeft);
+
+  closeCountdownIntervalId = setInterval(() => {
+    secondsLeft -= 1;
+    updateCloseCountdown(secondsLeft);
+
+    if (secondsLeft <= 0) {
+      clearCloseCountdown();
+      closeCurrentTab();
+    }
+  }, 1000);
 }
 
 function setConnectedStatus(message) {
   clearInvalidQrWarning();
   setResultState("is-success");
   setStatus(message);
-  connectButton.textContent = "Connected";
-  connectButton.classList.add("is-connected");
-  connectButton.disabled = true;
+  connectionStatusButton.textContent = "Connected";
+  connectionStatusButton.classList.remove("is-connecting");
+  connectionStatusButton.classList.add("is-connected");
+  connectionStatusButton.hidden = false;
+  rescanButton.hidden = true;
+  closeTabButton.hidden = false;
+  startCloseCountdown();
+}
+
+function setConnectingStatus() {
+  setResultState("is-ready");
+  setStatus("Connecting to Android...");
+  connectionStatusButton.textContent = "Connecting";
+  connectionStatusButton.classList.add("is-connecting");
+  connectionStatusButton.classList.remove("is-connected");
+  connectionStatusButton.hidden = false;
+  rescanButton.hidden = true;
 }
 
 function resetConnectedStatus() {
+  clearCloseCountdown();
   setResultState(null);
-  connectButton.textContent = "Connect";
-  connectButton.classList.remove("is-connected");
+  connectionStatusButton.textContent = "Connecting";
+  connectionStatusButton.classList.remove("is-connected", "is-connecting");
+  connectionStatusButton.hidden = true;
+  closeTabButton.hidden = true;
 }
 
 function stopCamera() {
@@ -100,7 +189,6 @@ async function startCamera() {
   decodedPayload = null;
   clearInvalidQrWarning();
   resetConnectedStatus();
-  connectButton.disabled = true;
   rescanButton.hidden = true;
   deviceDetails.hidden = true;
   deviceDetails.textContent = "";
@@ -150,7 +238,9 @@ function handleDecodedQr(rawText) {
   try {
     payload = parseAndroidLanPayload(rawText);
   } catch (error) {
-    showInvalidQrWarning(error.message || "QR code is not a Tryfox Android receiver.");
+    if (trackInvalidQrCandidate(rawText)) {
+      showInvalidQrWarning(error.message || "QR code is not a Tryfox Android receiver.");
+    }
     animationFrameId = requestAnimationFrame(scanFrame);
     return;
   }
@@ -158,25 +248,24 @@ function handleDecodedQr(rawText) {
   clearInvalidQrWarning();
   decodedPayload = payload;
   stopCamera();
-  setResultState("is-ready");
-  setStatus(`Ready to connect to ${payload.deviceName}.`);
   deviceDetails.textContent = payload.endpoint;
   deviceDetails.hidden = false;
-  connectButton.disabled = false;
-  rescanButton.hidden = false;
+  connectToAndroid();
 }
 
 async function ensureEndpointPermission(endpoint) {
   const originPattern = getEndpointPermissionPattern(endpoint);
-  return browser.permissions.request({
+  return browser.permissions.contains({
     origins: [originPattern],
   });
 }
 
-connectButton.addEventListener("click", async () => {
+async function connectToAndroid() {
   if (!decodedPayload) {
     return;
   }
+
+  setConnectingStatus();
 
   try {
     const allowed = await ensureEndpointPermission(decodedPayload.endpoint);
@@ -185,8 +274,6 @@ connectButton.addEventListener("click", async () => {
       return;
     }
 
-    connectButton.disabled = true;
-    setStatus("Sending to Android...");
     const result = await browser.runtime.sendMessage({
       type: "ANDROID_QR_SCANNED",
       payload: decodedPayload,
@@ -198,10 +285,12 @@ connectButton.addEventListener("click", async () => {
       setConnectedStatus("Connected. Android is ready to receive Tryfox revisions.");
     }
   } catch (error) {
-    setStatus(error.message || "Failed to send to Android.");
-    connectButton.disabled = false;
+    setResultState("is-error");
+    setStatus("Couldn't connect to the Android device.");
+    connectionStatusButton.hidden = true;
+    rescanButton.hidden = false;
   }
-});
+}
 
 rescanButton.addEventListener("click", () => {
   startCamera().catch(error => {
@@ -209,7 +298,14 @@ rescanButton.addEventListener("click", () => {
   });
 });
 
-window.addEventListener("pagehide", stopCamera);
+closeTabButton.addEventListener("click", () => {
+  closeCurrentTab();
+});
+
+window.addEventListener("pagehide", () => {
+  clearCloseCountdown();
+  stopCamera();
+});
 
 startCamera().catch(error => {
   setStatus(error.message || "Failed to start camera.");

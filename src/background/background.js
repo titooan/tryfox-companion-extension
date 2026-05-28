@@ -6,10 +6,14 @@
     parseAndroidLanPayload,
   } = root.tryfoxAndroidLanPayload;
   const { randomBase64Url } = root.tryfoxLanAuth;
-  const { sendTryRevisionToAndroid } = root.tryfoxLanClient;
+  const {
+    pingAndroidDevice,
+    sendTryRevisionToAndroid,
+  } = root.tryfoxLanClient;
 
   const STORAGE_KEYS = {
     DEVICE: "tryfoxAndroidDevice",
+    DEVICES: "tryfoxAndroidDevices",
     EXTENSION_ID: "tryfoxExtensionId",
   };
 
@@ -18,6 +22,7 @@
     OPEN_ANDROID_SCANNER: "OPEN_ANDROID_SCANNER",
     ANDROID_QR_SCANNED: "ANDROID_QR_SCANNED",
     SEND_TRY_TO_ANDROID: "SEND_TRY_TO_ANDROID",
+    SET_ANDROID_DEVICE_SELECTED: "SET_ANDROID_DEVICE_SELECTED",
     FORGET_ANDROID_DEVICE: "FORGET_ANDROID_DEVICE",
   };
 
@@ -47,13 +52,31 @@
     return extensionId;
   }
 
-  async function getStoredDevice() {
+  async function getStoredDevices() {
     const browserApi = getBrowser();
-    const stored = await browserApi.storage.local.get(STORAGE_KEYS.DEVICE);
-    return stored[STORAGE_KEYS.DEVICE] || null;
+    const stored = await browserApi.storage.local.get([
+      STORAGE_KEYS.DEVICE,
+      STORAGE_KEYS.DEVICES,
+    ]);
+    let devices = Array.isArray(stored[STORAGE_KEYS.DEVICES])
+      ? stored[STORAGE_KEYS.DEVICES]
+      : [];
+
+    if (!devices.length && stored[STORAGE_KEYS.DEVICE]) {
+      devices = [{
+        ...stored[STORAGE_KEYS.DEVICE],
+        selected: true,
+      }];
+      await browserApi.storage.local.set({
+        [STORAGE_KEYS.DEVICES]: devices,
+      });
+      await browserApi.storage.local.remove(STORAGE_KEYS.DEVICE);
+    }
+
+    return devices;
   }
 
-  function publicDevice(device) {
+  function publicDevice(device, status = device.lastPingStatus || "unknown") {
     if (!device) {
       return null;
     }
@@ -63,28 +86,120 @@
       deviceName: device.deviceName,
       endpoint: device.endpoint,
       endpointPermissionPattern: getEndpointPermissionPattern(device.endpoint),
+      selected: device.selected !== false,
+      status,
+      lastPingedAt: device.lastPingedAt || null,
       pairedAt: device.pairedAt,
       lastSeenAt: device.lastSeenAt || null,
     };
   }
 
-  async function setStoredDevice(device) {
+  async function setStoredDevices(devices) {
     await getBrowser().storage.local.set({
-      [STORAGE_KEYS.DEVICE]: device,
+      [STORAGE_KEYS.DEVICES]: devices,
     });
   }
 
-  async function clearStoredDevice() {
-    await getBrowser().storage.local.remove(STORAGE_KEYS.DEVICE);
+  async function upsertStoredDevice(device) {
+    const devices = await getStoredDevices();
+    const existingDeviceIndex = devices.findIndex(item => item.deviceId === device.deviceId);
+    const existingDevice = existingDeviceIndex >= 0 ? devices[existingDeviceIndex] : null;
+    let nextDevices;
+
+    if (existingDevice) {
+      const nextDevice = {
+        ...existingDevice,
+        ...device,
+        selected: existingDevice.selected !== false,
+      };
+      nextDevices = devices.map((storedDevice, index) => (
+        index === existingDeviceIndex ? nextDevice : storedDevice
+      ));
+    } else {
+      nextDevices = [
+        ...devices,
+        {
+          ...device,
+          selected: true,
+        },
+      ];
+    }
+
+    await setStoredDevices(nextDevices);
+    return nextDevices[existingDeviceIndex >= 0 ? existingDeviceIndex : nextDevices.length - 1];
+  }
+
+  async function forgetStoredDevice(deviceId) {
+    const devices = await getStoredDevices();
+    await setStoredDevices(devices.filter(device => device.deviceId !== deviceId));
+  }
+
+  async function setStoredDeviceSelected(deviceId, selected) {
+    const devices = await getStoredDevices();
+    const nextDevices = devices.map(device => {
+      if (device.deviceId !== deviceId) {
+        return device;
+      }
+
+      return {
+        ...device,
+        selected: Boolean(selected),
+      };
+    });
+
+    await setStoredDevices(nextDevices);
+  }
+
+  async function setStoredDevicePingStatus(deviceId, status) {
+    const devices = await getStoredDevices();
+    const now = Date.now();
+    const nextDevices = devices.map(device => {
+      if (device.deviceId !== deviceId) {
+        return device;
+      }
+
+      return {
+        ...device,
+        lastPingStatus: status,
+        lastPingedAt: now,
+      };
+    });
+
+    await setStoredDevices(nextDevices);
   }
 
   async function getAndroidState() {
-    const device = await getStoredDevice();
+    const devices = await getStoredDevices();
+    const now = Date.now();
+    const statusByDeviceId = new Map(await Promise.all(devices.map(async device => {
+      try {
+        await pingAndroidDevice({ device });
+        return [device.deviceId, "connected"];
+      } catch (error) {
+        return [device.deviceId, "disconnected"];
+      }
+    })));
+    const latestDevices = await getStoredDevices();
+    const devicesWithStatus = latestDevices.map(device => {
+      const status = statusByDeviceId.get(device.deviceId);
+      if (!status) {
+        return device;
+      }
+
+      return {
+        ...device,
+        lastPingStatus: status,
+        lastPingedAt: now,
+      };
+    });
+    await setStoredDevices(devicesWithStatus);
+    const publicDevices = devicesWithStatus.map(device => publicDevice(device));
 
     return {
       status: lastStatus,
-      device: publicDevice(device),
-      hasDevice: Boolean(device),
+      devices: publicDevices,
+      device: publicDevices[0] || null,
+      hasDevice: publicDevices.length > 0,
       hasPendingTryPayload: Boolean(pendingTryPayload),
     };
   }
@@ -129,12 +244,13 @@
       lastSeenAt: null,
     };
 
-    await setStoredDevice(device);
+    const storedDevice = await upsertStoredDevice(device);
     lastStatus = `Paired with ${device.deviceName}`;
-    return device;
+    return storedDevice;
   }
 
   async function sendToDevice(device, tryPayload) {
+    const now = Date.now();
     const extensionId = await getExtensionId();
     const response = await sendTryRevisionToAndroid({
       device,
@@ -143,15 +259,16 @@
     });
     const updatedDevice = {
       ...device,
-      lastSeenAt: Date.now(),
+      lastSeenAt: now,
+      lastPingStatus: "connected",
+      lastPingedAt: now,
     };
 
-    await setStoredDevice(updatedDevice);
+    await upsertStoredDevice(updatedDevice);
     lastStatus = `Sent to ${device.deviceName}`;
 
     return {
       response,
-      state: await getAndroidState(),
     };
   }
 
@@ -161,6 +278,14 @@
     pendingTryPayload = null;
 
     if (!tryPayload) {
+      try {
+        await pingAndroidDevice({ device });
+        await setStoredDevicePingStatus(device.deviceId, "connected");
+      } catch (error) {
+        await setStoredDevicePingStatus(device.deviceId, "disconnected");
+        throw error;
+      }
+
       return {
         sent: false,
         state: await getAndroidState(),
@@ -171,21 +296,59 @@
     return {
       sent: true,
       ...result,
+      state: await getAndroidState(),
     };
   }
 
   async function sendTryToAndroid(message) {
-    const device = await getStoredDevice();
+    const devices = await getStoredDevices();
+    const selectedDeviceIds = Array.isArray(message.deviceIds) ? message.deviceIds : [];
+    const selectedDevices = devices.filter(device => selectedDeviceIds.includes(device.deviceId));
 
-    if (!device) {
-      throw new Error("No Android device is paired");
+    if (!selectedDevices.length) {
+      throw new Error("No Android device is selected");
     }
 
-    return sendToDevice(device, message.tryPayload);
+    const settledResults = await Promise.allSettled(selectedDevices.map(device => sendToDevice(device, message.tryPayload)));
+    const results = [];
+
+    for (let index = 0; index < settledResults.length; index += 1) {
+      const settledResult = settledResults[index];
+      const device = selectedDevices[index];
+
+      if (settledResult.status === "fulfilled") {
+        results.push({
+          deviceId: device.deviceId,
+          ok: true,
+          response: settledResult.value.response,
+        });
+      } else {
+        await setStoredDevicePingStatus(device.deviceId, "disconnected");
+        results.push({
+          deviceId: device.deviceId,
+          ok: false,
+          error: settledResult.reason && settledResult.reason.message
+            ? settledResult.reason.message
+            : "Failed to send to Android device",
+        });
+      }
+    }
+
+    lastStatus = `Sent to ${selectedDevices.length} Android device${selectedDevices.length === 1 ? "" : "s"}`;
+
+    return {
+      results,
+      state: await getAndroidState(),
+    };
   }
 
-  async function forgetAndroidDevice() {
-    await clearStoredDevice();
+  async function setAndroidDeviceSelected(message) {
+    await setStoredDeviceSelected(message.deviceId, message.selected);
+    return getAndroidState();
+  }
+
+  async function forgetAndroidDevice(message) {
+    await forgetStoredDevice(message.deviceId);
     lastStatus = "Android device forgotten";
     return getAndroidState();
   }
@@ -204,8 +367,10 @@
         return handleAndroidQrScanned(message);
       case MESSAGE_TYPES.SEND_TRY_TO_ANDROID:
         return sendTryToAndroid(message);
+      case MESSAGE_TYPES.SET_ANDROID_DEVICE_SELECTED:
+        return setAndroidDeviceSelected(message);
       case MESSAGE_TYPES.FORGET_ANDROID_DEVICE:
-        return forgetAndroidDevice();
+        return forgetAndroidDevice(message);
       default:
         return undefined;
     }

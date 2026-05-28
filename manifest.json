@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "name": "tryfox-companion",
+  "name": "TryFox",
   "version": "0.0.1",
   "description": "Generate QR for TryFox",
   "homepage_url": "https://github.com/titooan/tryfox-companion-extension/",
@@ -9,8 +9,7 @@
     "32": "icons/tryfox.png",
     "64": "icons/tryfox.png"
   },
-  "permissions": ["activeTab", "downloads", "storage"],
-  "optional_permissions": ["http://*/*"],
+  "permissions": ["activeTab", "downloads", "storage", "http://*/*"],
   "browser_specific_settings": {
     "gecko": {
       "id": "tryfox-companion@titouan",
@@ -27,7 +26,7 @@
       "32": "icons/tryfox.png",
       "64": "icons/tryfox.png"
     },
-    "default_title": "fxqrl",
+    "default_title": "TryFox",
     "default_popup": "popup/fxqrl.html"
   },
 

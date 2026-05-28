@@ -20,7 +20,7 @@ Supported cases currently include Treeherder `jobs` URLs using either:
 
 ## Android LAN Send
 
-The popup includes an `ANDROID` tab. The Android app starts a temporary local HTTP receiver and shows a QR code containing its endpoint and a shared secret. The extension opens a scanner page, uses the laptop camera to scan that QR code, requests permission for the Android LAN host, then sends the current Try payload with an HMAC-signed HTTP POST.
+The popup includes an `ANDROID` tab. The Android app starts a temporary local HTTP receiver and shows a QR code containing its endpoint and a shared secret. The extension opens a scanner page, uses the laptop camera to scan that QR code, requests permission for the Android LAN host, then saves the device for later sends. The extension can remember several Android devices, pings each local endpoint to show `Connected` or `Disconnected`, and sends the current Try payload with an HMAC-signed HTTP POST to every checked connected device.
 
 The extension does not expose a local TCP, HTTP, or WebSocket server.
 
@@ -56,6 +56,10 @@ Expected Android QR payload:
 ```
 
 The extension stores the Android endpoint and shared secret in `browser.storage.local` for later sends. If the Android IP changes, scan the Android QR again to refresh the stored endpoint.
+
+The Android receiver should also answer a lightweight `GET /tryfox/v1/messages` request, or at least return any HTTP response for that path, so the extension can detect whether the remembered device is currently reachable on the LAN. A network failure or timeout is shown as `Disconnected`.
+
+The signed `POST /tryfox/v1/messages` JSON body can include an optional `title` field. The extension fills it from the Android tab `Label` field when provided, and serializes it as `null` when no label is set. The HMAC still uses the same headers and signing string format; `title` is covered because the signature is computed from the final raw JSON body.
 
 ## Install Locally In Firefox
 

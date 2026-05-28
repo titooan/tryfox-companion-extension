@@ -25,6 +25,9 @@
       repo: tryPayload.repo || null,
       revision: tryPayload.revision || null,
       author: tryPayload.author || null,
+      title: typeof tryPayload.title === "string" && tryPayload.title.trim()
+        ? tryPayload.title.trim()
+        : null,
     };
   }
 
@@ -90,8 +93,41 @@
     return { ok: true };
   }
 
+  async function pingAndroidDevice({ device, fetchImpl, timeoutMs = 1200 }) {
+    if (!device || !device.endpoint) {
+      throw new Error("Android device record is incomplete");
+    }
+
+    const requestFetch = fetchImpl || root.fetch;
+    if (typeof requestFetch !== "function") {
+      throw new Error("fetch is unavailable");
+    }
+
+    const abortController = typeof root.AbortController === "function"
+      ? new root.AbortController()
+      : null;
+    const timeoutId = abortController
+      ? setTimeout(() => abortController.abort(), timeoutMs)
+      : null;
+
+    try {
+      await requestFetch(device.endpoint, {
+        method: "GET",
+        cache: "no-store",
+        signal: abortController ? abortController.signal : undefined,
+      });
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    return { ok: true };
+  }
+
   return {
     createTryRevisionMessage,
+    pingAndroidDevice,
     sendTryRevisionToAndroid,
   };
 });
