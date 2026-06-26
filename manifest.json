@@ -26,12 +26,12 @@
       "32": "icons/tryfox.png",
       "64": "icons/tryfox.png"
     },
-    "default_title": "TryFox",
-    "default_popup": "popup/fxqrl.html"
+    "default_title": "TryFox"
   },
 
   "background": {
     "scripts": [
+      "popup/treeherder-url.js",
       "src/pairing/androidLanPayload.js",
       "src/pairing/lanAuth.js",
       "src/background/lanClient.js",

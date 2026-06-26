@@ -8,6 +8,19 @@ const vm = require("node:vm");
 
 const androidLanPayload = require("../src/pairing/androidLanPayload.js");
 
+function loadTreeherderUrlApi() {
+  const filePath = path.join(__dirname, "..", "popup", "treeherder-url.js");
+  const source = fs.readFileSync(filePath, "utf8");
+  const context = {
+    URL,
+    URLSearchParams,
+    globalThis: {},
+  };
+
+  vm.runInNewContext(source, context, { filename: filePath });
+  return context.globalThis.tryfoxTreeherderUrl;
+}
+
 function clone(value) {
   if (value === undefined) {
     return undefined;
@@ -84,14 +97,19 @@ function loadBackground({
   initialStorage = {},
   pingAndroidDevice = async () => ({ ok: true }),
   sendTryRevisionToAndroid = async () => ({ ok: true }),
+  executeScript = async () => [null],
 } = {}) {
   const filePath = path.join(__dirname, "..", "src", "background", "background.js");
   const source = fs.readFileSync(filePath, "utf8");
   const storage = createStorage(initialStorage);
   let listener = null;
+  let browserActionClickListener = null;
   const createdTabs = [];
+  const browserActionPopups = [];
+  let browserActionOpenPopupCalls = 0;
   const context = {
     console,
+    setTimeout,
     URL,
     globalThis: null,
     tryfoxAndroidLanPayload: androidLanPayload,
@@ -102,6 +120,7 @@ function loadBackground({
       pingAndroidDevice,
       sendTryRevisionToAndroid,
     },
+    tryfoxTreeherderUrl: loadTreeherderUrlApi(),
     browser: {
       runtime: {
         getURL: pathname => `moz-extension://tryfox/${pathname}`,
@@ -119,6 +138,20 @@ function loadBackground({
           createdTabs.push(tab);
           return tab;
         },
+        executeScript,
+      },
+      browserAction: {
+        onClicked: {
+          addListener(callback) {
+            browserActionClickListener = callback;
+          },
+        },
+        async setPopup(details) {
+          browserActionPopups.push(clone(details));
+        },
+        async openPopup() {
+          browserActionOpenPopupCalls += 1;
+        },
       },
     },
   };
@@ -128,8 +161,16 @@ function loadBackground({
 
   return {
     context,
+    browserActionPopups,
+    get browserActionOpenPopupCalls() {
+      return browserActionOpenPopupCalls;
+    },
     createdTabs,
     storage,
+    async clickBrowserAction(tab) {
+      assert.equal(typeof browserActionClickListener, "function");
+      return browserActionClickListener(tab);
+    },
     sendMessage(message) {
       assert.equal(typeof listener, "function");
       return listener(message);
@@ -267,4 +308,51 @@ test("background rejects QR scan connection when Android endpoint cannot be reac
   );
 
   assert.equal(background.storage.data.tryfoxAndroidDevices[0].lastPingStatus, "disconnected");
+});
+
+test("browser action does not open the popup on unsupported Phabricator pages", async () => {
+  const background = loadBackground({
+    executeScript: async () => [null],
+  });
+
+  await background.clickBrowserAction({
+    id: 12,
+    url: "https://phabricator.services.mozilla.com/D308677",
+  });
+
+  assert.equal(background.browserActionOpenPopupCalls, 0);
+});
+
+test("browser action opens the popup on supported Treeherder pages", async () => {
+  const background = loadBackground();
+
+  await background.clickBrowserAction({
+    id: 5,
+    url: "https://treeherder.mozilla.org/jobs?repo=try&revision=abcdef",
+  });
+
+  assert.equal(background.browserActionOpenPopupCalls, 1);
+  assert.deepEqual(background.browserActionPopups[0], {
+    tabId: 5,
+    popup: "popup/fxqrl.html",
+  });
+});
+
+test("browser action opens the popup on Phabricator pages with a detected try link", async () => {
+  const background = loadBackground({
+    executeScript: async () => [{
+      url: "https://treeherder.mozilla.org/jobs?repo=try&revision=a084d7e94ff66eab2b53289411fbdbb6e9514ab9",
+    }],
+  });
+
+  await background.clickBrowserAction({
+    id: 7,
+    url: "https://phabricator.services.mozilla.com/D308677",
+  });
+
+  assert.equal(background.browserActionOpenPopupCalls, 1);
+  assert.deepEqual(background.browserActionPopups[0], {
+    tabId: 7,
+    popup: "popup/fxqrl.html",
+  });
 });

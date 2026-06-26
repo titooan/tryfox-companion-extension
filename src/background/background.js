@@ -10,6 +10,7 @@
     pingAndroidDevice,
     sendTryRevisionToAndroid,
   } = root.tryfoxLanClient;
+  const tryfoxTreeherderUrl = root.tryfoxTreeherderUrl;
 
   const STORAGE_KEYS = {
     DEVICE: "tryfoxAndroidDevice",
@@ -25,6 +26,8 @@
     SET_ANDROID_DEVICE_SELECTED: "SET_ANDROID_DEVICE_SELECTED",
     FORGET_ANDROID_DEVICE: "FORGET_ANDROID_DEVICE",
   };
+  const POPUP_PATH = "popup/fxqrl.html";
+  const EMPTY_POPUP = "";
 
   let pendingTryPayload = null;
   let lastStatus = "Idle";
@@ -204,6 +207,162 @@
     };
   }
 
+  async function detectPhabricatorTryLink(tabId) {
+    const [result] = await getBrowser().tabs.executeScript(tabId, {
+      code: `(() => {
+        const TRY_LINK_PATTERN = /^https:\\/\\/treeherder\\.mozilla\\.org\\/(#\\/)?jobs\\?/i;
+
+        function getRouteAndParams(url) {
+          if (url.hash && url.hash.startsWith("#/")) {
+            const hashUrl = new URL(url.hash.slice(1), \`\${url.origin}/\`);
+            return {
+              route: hashUrl.pathname,
+              params: hashUrl.searchParams,
+            };
+          }
+
+          return {
+            route: url.pathname,
+            params: url.searchParams,
+          };
+        }
+
+        function parseTryLinkParams(url) {
+          if (!url) {
+            return { repo: null, revision: null };
+          }
+
+          const { params } = getRouteAndParams(url);
+          return {
+            repo: params.get("repo") || null,
+            revision: params.get("revision") || null,
+          };
+        }
+
+        function isReviewbotComment(eventNode) {
+          if (!eventNode || typeof eventNode.querySelector !== "function") {
+            return false;
+          }
+
+          const authorAnchor = eventNode.querySelector(
+            ".phui-timeline-title .phui-link-person, .phui-timeline-title .phui-link-profile, .phui-timeline-title .phui-handle"
+          );
+
+          if (!authorAnchor) {
+            return false;
+          }
+
+          const authorName = (authorAnchor.textContent || "").trim().toLowerCase();
+          if (authorName === "reviewbot") {
+            return true;
+          }
+
+          const href = typeof authorAnchor.getAttribute === "function"
+            ? authorAnchor.getAttribute("href") || ""
+            : authorAnchor.href || "";
+          return /\\/p\\/reviewbot\\/?(?:$|[?#])/i.test(href);
+        }
+
+        function getLastTryLink(anchors) {
+          const tryLinks = anchors.filter(anchor => anchor && typeof anchor.href === "string" && TRY_LINK_PATTERN.test(anchor.href));
+          return tryLinks.length ? tryLinks[tryLinks.length - 1] : null;
+        }
+
+        function extractSummaryTryLinkData(doc) {
+          const sections = Array.from(doc.querySelectorAll(".phui-property-list-section"));
+          for (const section of sections) {
+            const header = section.querySelector(".phui-property-list-section-header");
+            if (!header || !/\\bsummary\\b/i.test(header.textContent || "")) {
+              continue;
+            }
+
+            const tryLink = getLastTryLink(Array.from(section.querySelectorAll("a[href]")));
+            if (!tryLink) {
+              continue;
+            }
+
+            return { url: tryLink.href };
+          }
+
+          return null;
+        }
+
+        const timelineEvents = Array.from(document.querySelectorAll(".phui-timeline-shell"));
+        let latest = null;
+
+        timelineEvents.forEach(eventNode => {
+          if (isReviewbotComment(eventNode)) {
+            return;
+          }
+
+          const tryLink = getLastTryLink(Array.from(eventNode.querySelectorAll("a[href]")));
+          if (!tryLink) {
+            return;
+          }
+
+          let parsedUrl = null;
+          try {
+            parsedUrl = new URL(tryLink.href);
+          } catch (error) {}
+
+          const { repo, revision } = parseTryLinkParams(parsedUrl);
+          if (!repo || !revision) {
+            return;
+          }
+
+          latest = { url: tryLink.href };
+        });
+
+        return latest || extractSummaryTryLinkData(document);
+      })();`,
+    });
+
+    return result && typeof result.url === "string" ? result.url : null;
+  }
+
+  async function isSupportedPopupTab(tab) {
+    const url = tab && typeof tab.url === "string" ? tab.url : "";
+
+    if (tryfoxTreeherderUrl.parseTryfoxJobUrl(url)) {
+      return true;
+    }
+
+    if (!tryfoxTreeherderUrl.isPhabricatorRevisionUrl(url) || !tab || typeof tab.id !== "number") {
+      return false;
+    }
+
+    try {
+      const tryLinkUrl = await detectPhabricatorTryLink(tab.id);
+      return Boolean(tryLinkUrl && tryfoxTreeherderUrl.parseTryfoxJobUrl(tryLinkUrl));
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async function openPopupForTab(tab) {
+    const browserApi = getBrowser();
+    const tabId = tab && typeof tab.id === "number" ? tab.id : null;
+    if (tabId == null || !browserApi.browserAction) {
+      return;
+    }
+
+    await browserApi.browserAction.setPopup({
+      tabId,
+      popup: POPUP_PATH,
+    });
+
+    try {
+      await browserApi.browserAction.openPopup();
+    } finally {
+      setTimeout(() => {
+        browserApi.browserAction.setPopup({
+          tabId,
+          popup: EMPTY_POPUP,
+        }).catch(() => {});
+      }, 1000);
+    }
+  }
+
   function validateTryPayload(tryPayload) {
     if (!tryPayload || typeof tryPayload !== "object") {
       throw new Error("Try payload is missing");
@@ -375,4 +534,14 @@
         return undefined;
     }
   });
+
+  if (root.browser.browserAction && root.browser.browserAction.onClicked) {
+    root.browser.browserAction.onClicked.addListener(async tab => {
+      if (!await isSupportedPopupTab(tab)) {
+        return;
+      }
+
+      await openPopupForTab(tab);
+    });
+  }
 })(typeof globalThis !== "undefined" ? globalThis : this);

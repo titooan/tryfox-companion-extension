@@ -54,6 +54,186 @@ function getQRCodeFilename(rawUrl) {
   return `${repo}-qrcode.png`;
 }
 
+async function resolveTryPayloadForTab(tab) {
+  const tabUrl = tab && tab.url ? tab.url : "";
+  const directTryPayload = tryfoxTreeherderUrl.parseTryfoxJobUrl(tabUrl);
+
+  if (directTryPayload) {
+    return {
+      pageType: "treeherder",
+      resolvedUrl: tabUrl,
+      tryPayload: directTryPayload,
+    };
+  }
+
+  if (!tryfoxTreeherderUrl.isPhabricatorRevisionUrl(tabUrl) || !tab || typeof tab.id !== "number") {
+    return {
+      pageType: "unsupported",
+      resolvedUrl: tabUrl,
+      tryPayload: null,
+    };
+  }
+
+  try {
+    const [tryLinkData] = await browser.tabs.executeScript(tab.id, {
+      code: `(() => {
+        const TRY_LINK_PATTERN = /^https:\\/\\/treeherder\\.mozilla\\.org\\/(#\\/)?jobs\\?/i;
+
+        function getRouteAndParams(url) {
+          if (url.hash && url.hash.startsWith("#/")) {
+            const hashUrl = new URL(url.hash.slice(1), \`\${url.origin}/\`);
+            return {
+              route: hashUrl.pathname,
+              params: hashUrl.searchParams,
+            };
+          }
+
+          return {
+            route: url.pathname,
+            params: url.searchParams,
+          };
+        }
+
+        function parseTryLinkParams(url) {
+          if (!url) {
+            return { repo: null, revision: null };
+          }
+
+          const { params } = getRouteAndParams(url);
+          return {
+            repo: params.get("repo") || null,
+            revision: params.get("revision") || null,
+          };
+        }
+
+        function isReviewbotComment(eventNode) {
+          if (!eventNode || typeof eventNode.querySelector !== "function") {
+            return false;
+          }
+
+          const authorAnchor = eventNode.querySelector(
+            ".phui-timeline-title .phui-link-person, .phui-timeline-title .phui-link-profile, .phui-timeline-title .phui-handle"
+          );
+
+          if (!authorAnchor) {
+            return false;
+          }
+
+          const authorName = (authorAnchor.textContent || "").trim().toLowerCase();
+          if (authorName === "reviewbot") {
+            return true;
+          }
+
+          const href = typeof authorAnchor.getAttribute === "function"
+            ? authorAnchor.getAttribute("href") || ""
+            : authorAnchor.href || "";
+          return /\\/p\\/reviewbot\\/?(?:$|[?#])/i.test(href);
+        }
+
+        function getLastTryLink(anchors) {
+          const tryLinks = anchors.filter(anchor => anchor && typeof anchor.href === "string" && TRY_LINK_PATTERN.test(anchor.href));
+          return tryLinks.length ? tryLinks[tryLinks.length - 1] : null;
+        }
+
+        function getAnchorId(anchor) {
+          if (!anchor) {
+            return null;
+          }
+
+          if (anchor.id) {
+            return anchor.id;
+          }
+
+          if (typeof anchor.getAttribute === "function") {
+            return anchor.getAttribute("name");
+          }
+
+          return null;
+        }
+
+        function extractSummaryTryLinkData(doc) {
+          const sections = Array.from(doc.querySelectorAll(".phui-property-list-section"));
+          for (const section of sections) {
+            const header = section.querySelector(".phui-property-list-section-header");
+            if (!header || !/\\bsummary\\b/i.test(header.textContent || "")) {
+              continue;
+            }
+
+            const tryLink = getLastTryLink(Array.from(section.querySelectorAll("a[href]")));
+            if (!tryLink) {
+              continue;
+            }
+
+            let parsedUrl = null;
+            try {
+              parsedUrl = new URL(tryLink.href);
+            } catch (error) {}
+
+            const { repo, revision } = parseTryLinkParams(parsedUrl);
+            return {
+              url: tryLink.href,
+              commentUrl: null,
+              commentId: null,
+              repo,
+              revision,
+            };
+          }
+
+          return null;
+        }
+
+        const timelineEvents = Array.from(document.querySelectorAll(".phui-timeline-shell"));
+        const baseUrl = \`\${window.location.origin}\${window.location.pathname}\${window.location.search}\`;
+        let latest = null;
+
+        timelineEvents.forEach(eventNode => {
+          if (isReviewbotComment(eventNode)) {
+            return;
+          }
+
+          const tryLink = getLastTryLink(Array.from(eventNode.querySelectorAll("a[href]")));
+          if (!tryLink) {
+            return;
+          }
+
+          let parsedUrl = null;
+          try {
+            parsedUrl = new URL(tryLink.href);
+          } catch (error) {}
+
+          const { repo, revision } = parseTryLinkParams(parsedUrl);
+          const anchor = eventNode.querySelector(".phabricator-anchor-view[id], .phabricator-anchor-view[name]");
+          const anchorId = getAnchorId(anchor);
+
+          latest = {
+            url: tryLink.href,
+            commentUrl: anchorId ? \`\${baseUrl}#\${anchorId}\` : null,
+            commentId: anchorId || null,
+            repo,
+            revision,
+          };
+        });
+
+        return latest || extractSummaryTryLinkData(document);
+      })();`,
+    });
+    const resolvedUrl = tryLinkData && typeof tryLinkData.url === "string" ? tryLinkData.url : "";
+    const tryPayload = resolvedUrl ? tryfoxTreeherderUrl.parseTryfoxJobUrl(resolvedUrl) : null;
+
+    return {
+      pageType: tryPayload ? "phabricator" : "unsupported",
+      resolvedUrl: resolvedUrl || tabUrl,
+      tryPayload,
+    };
+  } catch (error) {
+    return {
+      pageType: "unsupported",
+      resolvedUrl: tabUrl,
+      tryPayload: null,
+    };
+  }
+}
+
 async function copyQRCodeImage() {
   if (!navigator.clipboard || !window.ClipboardItem || !navigator.clipboard.write) {
     throw new Error("Image clipboard API unavailable");
@@ -212,9 +392,11 @@ async function ensureEndpointPermission(endpointPermissionPattern) {
   });
 }
 
-browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
-  const originUrl = tabs[0] && tabs[0].url ? tabs[0].url : "";
-  const tryPayload = tryfoxTreeherderUrl.parseTryfoxJobUrl(originUrl);
+browser.tabs.query({ active: true, currentWindow: true }).then(async tabs => {
+  const activeTab = tabs[0] || null;
+  const resolvedTryPage = await resolveTryPayloadForTab(activeTab);
+  const originUrl = resolvedTryPage.resolvedUrl;
+  const tryPayload = resolvedTryPage.tryPayload;
   const deepLink = tryPayload ? tryPayload.tryfoxDeepLink : null;
 
   browser.storage.local.get("cellSize").then(async result => {
@@ -251,7 +433,7 @@ browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
     function getModeData(mode) {
       if (mode === "https") {
         return {
-          header: "Origin Link",
+          header: resolvedTryPage.pageType === "phabricator" ? "Treeherder Link" : "Origin Link",
           text: originUrl,
         };
       }
