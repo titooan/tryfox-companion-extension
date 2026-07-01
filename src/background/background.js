@@ -23,14 +23,21 @@
     OPEN_ANDROID_SCANNER: "OPEN_ANDROID_SCANNER",
     ANDROID_QR_SCANNED: "ANDROID_QR_SCANNED",
     SEND_TRY_TO_ANDROID: "SEND_TRY_TO_ANDROID",
+    RESOLVE_TRY_PAYLOAD: "RESOLVE_TRY_PAYLOAD",
     SET_ANDROID_DEVICE_SELECTED: "SET_ANDROID_DEVICE_SELECTED",
     FORGET_ANDROID_DEVICE: "FORGET_ANDROID_DEVICE",
   };
   const POPUP_PATH = "popup/fxqrl.html";
   const EMPTY_POPUP = "";
+  const DEFAULT_LANDO_API_BASE = "https://api.lando.services.mozilla.com";
+  const LANDO_INSTANCE_API_BASES = new Map([
+    ["lando-prod-2025", "https://lando.moz.tools"],
+  ]);
 
   let pendingTryPayload = null;
   let lastStatus = "Idle";
+  const landoRevisionCache = new Map();
+  const landoRevisionPending = new Map();
 
   function getBrowser() {
     if (!root.browser) {
@@ -207,6 +214,104 @@
     };
   }
 
+  function normalizeLandoInstance(value) {
+    if (value == null) {
+      return null;
+    }
+
+    const normalized = String(value).trim().toLowerCase();
+    return normalized || null;
+  }
+
+  function getLandoApiBaseUrl(landoInstance) {
+    const normalized = normalizeLandoInstance(landoInstance);
+    return LANDO_INSTANCE_API_BASES.get(normalized) || DEFAULT_LANDO_API_BASE;
+  }
+
+  function buildLandoLandingJobUrl(landoCommitId, landoInstance = null) {
+    const id = String(landoCommitId || "").trim();
+    if (!id) {
+      return null;
+    }
+
+    const apiBase = getLandoApiBaseUrl(landoInstance);
+    const params = new URLSearchParams({
+      lando_revision_id: id,
+      count: "1",
+    });
+    const encodedId = encodeURIComponent(id);
+    const path = apiBase === DEFAULT_LANDO_API_BASE
+      ? `/landing_jobs/${encodedId}`
+      : `/landing_jobs/${encodedId}/`;
+
+    return `${apiBase}${path}?${params.toString()}`;
+  }
+
+  function buildLandoRevisionCacheKey(landoCommitId, landoInstance = null) {
+    return `${getLandoApiBaseUrl(landoInstance)}:${String(landoCommitId || "").trim()}`;
+  }
+
+  async function resolveRevisionFromLando(landoCommitId, landoInstance = null) {
+    if (!landoCommitId) {
+      return null;
+    }
+
+    const normalizedLandoInstance = normalizeLandoInstance(landoInstance);
+    const cacheKey = buildLandoRevisionCacheKey(landoCommitId, normalizedLandoInstance);
+
+    if (landoRevisionCache.has(cacheKey)) {
+      return landoRevisionCache.get(cacheKey);
+    }
+
+    if (landoRevisionPending.has(cacheKey)) {
+      return landoRevisionPending.get(cacheKey);
+    }
+
+    const promise = (async () => {
+      try {
+        const url = buildLandoLandingJobUrl(landoCommitId, normalizedLandoInstance);
+        const response = await fetch(url, {
+          credentials: "omit",
+          headers: {
+            Accept: "application/json",
+            "User-Agent": "tryfox-companion-extension",
+          },
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const data = await response.json();
+        const revision =
+          data?.results?.[0]?.commit_id ||
+          data?.results?.[0]?.commit ||
+          data?.results?.[0]?.revision ||
+          data?.commit_id ||
+          data?.revision ||
+          null;
+
+        return revision || null;
+      } catch (error) {
+        return null;
+      }
+    })()
+      .then(revision => {
+        landoRevisionPending.delete(cacheKey);
+        if (revision) {
+          landoRevisionCache.set(cacheKey, revision);
+        }
+        return revision;
+      })
+      .catch(error => {
+        landoRevisionPending.delete(cacheKey);
+        throw error;
+      });
+
+    landoRevisionPending.set(cacheKey, promise);
+    return promise;
+  }
+
   async function detectPhabricatorTryLink(tabId) {
     const [result] = await getBrowser().tabs.executeScript(tabId, {
       code: `(() => {
@@ -229,13 +334,15 @@
 
         function parseTryLinkParams(url) {
           if (!url) {
-            return { repo: null, revision: null };
+            return { repo: null, revision: null, landoCommitId: null, landoInstance: null };
           }
 
           const { params } = getRouteAndParams(url);
           return {
             repo: params.get("repo") || null,
             revision: params.get("revision") || null,
+            landoCommitId: params.get("landoCommitID") || params.get("lando_commit_id") || null,
+            landoInstance: params.get("landoInstance") || params.get("lando_instance") || null,
           };
         }
 
@@ -305,11 +412,6 @@
             parsedUrl = new URL(tryLink.href);
           } catch (error) {}
 
-          const { repo, revision } = parseTryLinkParams(parsedUrl);
-          if (!repo || !revision) {
-            return;
-          }
-
           latest = { url: tryLink.href };
         });
 
@@ -337,6 +439,38 @@
     } catch (error) {
       return false;
     }
+  }
+
+  async function resolveTryPayload(message) {
+    const tryPayload = message && message.tryPayload && typeof message.tryPayload === "object"
+      ? message.tryPayload
+      : null;
+
+    if (!tryPayload) {
+      return null;
+    }
+
+    if (typeof tryPayload.tryfoxDeepLink === "string" && tryPayload.tryfoxDeepLink) {
+      return tryPayload;
+    }
+
+    if (!tryPayload.landoCommitId || !tryPayload.repo) {
+      return null;
+    }
+
+    const revision = await resolveRevisionFromLando(tryPayload.landoCommitId, tryPayload.landoInstance);
+    if (!revision) {
+      return null;
+    }
+
+    return {
+      ...tryPayload,
+      tryfoxDeepLink: `tryfox://jobs?${new URLSearchParams({
+        repo: tryPayload.repo,
+        revision,
+      }).toString()}`,
+      revision,
+    };
   }
 
   async function openPopupForTab(tab) {
@@ -526,6 +660,8 @@
         return handleAndroidQrScanned(message);
       case MESSAGE_TYPES.SEND_TRY_TO_ANDROID:
         return sendTryToAndroid(message);
+      case MESSAGE_TYPES.RESOLVE_TRY_PAYLOAD:
+        return resolveTryPayload(message);
       case MESSAGE_TYPES.SET_ANDROID_DEVICE_SELECTED:
         return setAndroidDeviceSelected(message);
       case MESSAGE_TYPES.FORGET_ANDROID_DEVICE:

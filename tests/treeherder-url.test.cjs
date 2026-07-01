@@ -127,6 +127,8 @@ test("parses a Treeherder revision URL into a Try payload", () => {
     repo: "try",
     revision: "673673d375640a9229404d6f7efc30943bad8b9d",
     author: null,
+    landoCommitId: null,
+    landoInstance: null,
   });
 });
 
@@ -178,6 +180,23 @@ test("parses author URLs into a Try payload", () => {
     repo: null,
     revision: null,
     author: "tthibaud@mozilla.com",
+    landoCommitId: null,
+    landoInstance: null,
+  });
+});
+
+test("parses lando-only Treeherder URLs into an HTTPS-only payload", () => {
+  const sourceUrl =
+    "https://treeherder.mozilla.org/jobs?repo=try&landoInstance=lando-prod-2025&landoCommitID=63036";
+
+  assert.deepEqual(plainObject(parseTryfoxJobUrl(sourceUrl)), {
+    sourceUrl,
+    tryfoxDeepLink: null,
+    repo: "try",
+    revision: null,
+    author: null,
+    landoCommitId: "63036",
+    landoInstance: "lando-prod-2025",
   });
 });
 

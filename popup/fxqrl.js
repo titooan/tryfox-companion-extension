@@ -55,14 +55,31 @@ function getQRCodeFilename(rawUrl) {
 }
 
 async function resolveTryPayloadForTab(tab) {
+  async function resolveLandoTryPayload(tryPayload) {
+    if (!tryPayload || tryPayload.tryfoxDeepLink || !tryPayload.landoCommitId) {
+      return tryPayload;
+    }
+
+    try {
+      const resolved = await browser.runtime.sendMessage({
+        type: "RESOLVE_TRY_PAYLOAD",
+        tryPayload,
+      });
+      return resolved || tryPayload;
+    } catch (error) {
+      return tryPayload;
+    }
+  }
+
   const tabUrl = tab && tab.url ? tab.url : "";
   const directTryPayload = tryfoxTreeherderUrl.parseTryfoxJobUrl(tabUrl);
 
   if (directTryPayload) {
+    const resolvedTryPayload = await resolveLandoTryPayload(directTryPayload);
     return {
       pageType: "treeherder",
       resolvedUrl: tabUrl,
-      tryPayload: directTryPayload,
+      tryPayload: resolvedTryPayload,
     };
   }
 
@@ -96,13 +113,15 @@ async function resolveTryPayloadForTab(tab) {
 
         function parseTryLinkParams(url) {
           if (!url) {
-            return { repo: null, revision: null };
+            return { repo: null, revision: null, landoCommitId: null, landoInstance: null };
           }
 
           const { params } = getRouteAndParams(url);
           return {
             repo: params.get("repo") || null,
             revision: params.get("revision") || null,
+            landoCommitId: params.get("landoCommitID") || params.get("lando_commit_id") || null,
+            landoInstance: params.get("landoInstance") || params.get("lando_instance") || null,
           };
         }
 
@@ -169,13 +188,15 @@ async function resolveTryPayloadForTab(tab) {
               parsedUrl = new URL(tryLink.href);
             } catch (error) {}
 
-            const { repo, revision } = parseTryLinkParams(parsedUrl);
+            const { repo, revision, landoCommitId, landoInstance } = parseTryLinkParams(parsedUrl);
             return {
               url: tryLink.href,
               commentUrl: null,
               commentId: null,
               repo,
               revision,
+              landoCommitId,
+              landoInstance,
             };
           }
 
@@ -201,7 +222,7 @@ async function resolveTryPayloadForTab(tab) {
             parsedUrl = new URL(tryLink.href);
           } catch (error) {}
 
-          const { repo, revision } = parseTryLinkParams(parsedUrl);
+          const { repo, revision, landoCommitId, landoInstance } = parseTryLinkParams(parsedUrl);
           const anchor = eventNode.querySelector(".phabricator-anchor-view[id], .phabricator-anchor-view[name]");
           const anchorId = getAnchorId(anchor);
 
@@ -211,6 +232,8 @@ async function resolveTryPayloadForTab(tab) {
             commentId: anchorId || null,
             repo,
             revision,
+            landoCommitId,
+            landoInstance,
           };
         });
 
@@ -219,11 +242,12 @@ async function resolveTryPayloadForTab(tab) {
     });
     const resolvedUrl = tryLinkData && typeof tryLinkData.url === "string" ? tryLinkData.url : "";
     const tryPayload = resolvedUrl ? tryfoxTreeherderUrl.parseTryfoxJobUrl(resolvedUrl) : null;
+    const resolvedTryPayload = await resolveLandoTryPayload(tryPayload);
 
     return {
-      pageType: tryPayload ? "phabricator" : "unsupported",
+      pageType: resolvedTryPayload ? "phabricator" : "unsupported",
       resolvedUrl: resolvedUrl || tabUrl,
-      tryPayload,
+      tryPayload: resolvedTryPayload,
     };
   } catch (error) {
     return {
@@ -398,6 +422,7 @@ browser.tabs.query({ active: true, currentWindow: true }).then(async tabs => {
   const originUrl = resolvedTryPage.resolvedUrl;
   const tryPayload = resolvedTryPage.tryPayload;
   const deepLink = tryPayload ? tryPayload.tryfoxDeepLink : null;
+  const supportsHttpsQr = Boolean(originUrl && resolvedTryPage.pageType !== "unsupported");
 
   browser.storage.local.get("cellSize").then(async result => {
     const cellSize = parseInt(result.cellSize) || DEFAULT_CELL_SIZE;
@@ -428,7 +453,7 @@ browser.tabs.query({ active: true, currentWindow: true }).then(async tabs => {
     let isSendingToAndroid = false;
 
     modeDeeplinkButton.disabled = !deepLink;
-    modeHttpsButton.disabled = !deepLink;
+    modeHttpsButton.disabled = !supportsHttpsQr;
 
     function getModeData(mode) {
       if (mode === "https") {
@@ -611,7 +636,11 @@ browser.tabs.query({ active: true, currentWindow: true }).then(async tabs => {
     }
 
     function setActiveMode(mode) {
-      if ((mode === "deeplink" || mode === "https") && !deepLink) {
+      if (mode === "deeplink" && !deepLink) {
+        mode = supportsHttpsQr ? "https" : "android";
+      }
+
+      if (mode === "https" && !supportsHttpsQr) {
         mode = "android";
       }
 
@@ -727,6 +756,8 @@ browser.tabs.query({ active: true, currentWindow: true }).then(async tabs => {
         setActiveMode("android");
       } else if (deepLink) {
         setActiveMode("deeplink");
+      } else if (supportsHttpsQr) {
+        setActiveMode("https");
       } else {
         unsupportedMessage.hidden = false;
         urlQrContent.hidden = true;
@@ -735,6 +766,8 @@ browser.tabs.query({ active: true, currentWindow: true }).then(async tabs => {
     } catch (error) {
       if (deepLink) {
         setActiveMode("deeplink");
+      } else if (supportsHttpsQr) {
+        setActiveMode("https");
       } else {
         unsupportedMessage.hidden = false;
         urlQrContent.hidden = true;

@@ -98,6 +98,12 @@ function loadBackground({
   pingAndroidDevice = async () => ({ ok: true }),
   sendTryRevisionToAndroid = async () => ({ ok: true }),
   executeScript = async () => [null],
+  fetchImpl = async () => ({
+    ok: true,
+    async json() {
+      return {};
+    },
+  }),
 } = {}) {
   const filePath = path.join(__dirname, "..", "src", "background", "background.js");
   const source = fs.readFileSync(filePath, "utf8");
@@ -111,6 +117,8 @@ function loadBackground({
     console,
     setTimeout,
     URL,
+    URLSearchParams,
+    fetch: fetchImpl,
     globalThis: null,
     tryfoxAndroidLanPayload: androidLanPayload,
     tryfoxLanAuth: {
@@ -354,5 +362,66 @@ test("browser action opens the popup on Phabricator pages with a detected try li
   assert.deepEqual(background.browserActionPopups[0], {
     tabId: 7,
     popup: "popup/fxqrl.html",
+  });
+});
+
+test("browser action opens the popup on Phabricator pages with a detected lando-only link", async () => {
+  const background = loadBackground({
+    executeScript: async () => [{
+      url: "https://treeherder.mozilla.org/jobs?repo=try&landoInstance=lando-prod-2025&landoCommitID=63036",
+    }],
+  });
+
+  await background.clickBrowserAction({
+    id: 8,
+    url: "https://phabricator.services.mozilla.com/D309571",
+  });
+
+  assert.equal(background.browserActionOpenPopupCalls, 1);
+  assert.deepEqual(background.browserActionPopups[0], {
+    tabId: 8,
+    popup: "popup/fxqrl.html",
+  });
+});
+
+test("background resolves a lando-only try payload into a deeplink payload", async () => {
+  const background = loadBackground({
+    fetchImpl: async url => ({
+      ok: true,
+      async json() {
+        assert.match(
+          url,
+          /^https:\/\/lando\.moz\.tools\/landing_jobs\/63036\/\?lando_revision_id=63036&count=1$/
+        );
+        return {
+          results: [{
+            commit_id: "a084d7e94ff66eab2b53289411fbdbb6e9514ab9",
+          }],
+        };
+      },
+    }),
+  });
+
+  const result = await background.sendMessage({
+    type: "RESOLVE_TRY_PAYLOAD",
+    tryPayload: {
+      sourceUrl: "https://treeherder.mozilla.org/jobs?repo=try&landoInstance=lando-prod-2025&landoCommitID=63036",
+      tryfoxDeepLink: null,
+      repo: "try",
+      revision: null,
+      author: null,
+      landoCommitId: "63036",
+      landoInstance: "lando-prod-2025",
+    },
+  });
+
+  assert.deepEqual(clone(result), {
+    sourceUrl: "https://treeherder.mozilla.org/jobs?repo=try&landoInstance=lando-prod-2025&landoCommitID=63036",
+    tryfoxDeepLink: "tryfox://jobs?repo=try&revision=a084d7e94ff66eab2b53289411fbdbb6e9514ab9",
+    repo: "try",
+    revision: "a084d7e94ff66eab2b53289411fbdbb6e9514ab9",
+    author: null,
+    landoCommitId: "63036",
+    landoInstance: "lando-prod-2025",
   });
 });

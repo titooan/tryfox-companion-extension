@@ -9,7 +9,14 @@
     "32": "icons/tryfox.png",
     "64": "icons/tryfox.png"
   },
-  "permissions": ["activeTab", "downloads", "storage", "http://*/*"],
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "storage",
+    "http://*/*",
+    "https://api.lando.services.mozilla.com/*",
+    "https://lando.moz.tools/*"
+  ],
   "browser_specific_settings": {
     "gecko": {
       "id": "tryfox-companion@titouan",

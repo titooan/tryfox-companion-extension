@@ -51,6 +51,8 @@
     }
 
     const revision = params.get("revision");
+    const landoCommitId = params.get("landoCommitID") || params.get("lando_commit_id");
+    const landoInstance = params.get("landoInstance") || params.get("lando_instance");
     if (revision) {
       const deepLinkParams = new URLSearchParams();
       const repo = params.get("repo");
@@ -66,6 +68,8 @@
         repo: repo || null,
         revision,
         author: null,
+        landoCommitId: landoCommitId || null,
+        landoInstance: landoInstance || null,
       };
     }
 
@@ -77,6 +81,20 @@
         repo: null,
         revision: null,
         author,
+        landoCommitId: landoCommitId || null,
+        landoInstance: landoInstance || null,
+      };
+    }
+
+    if (landoCommitId) {
+      return {
+        sourceUrl: rawUrl,
+        tryfoxDeepLink: null,
+        repo: params.get("repo") || null,
+        revision: null,
+        author: null,
+        landoCommitId,
+        landoInstance: landoInstance || null,
       };
     }
 
