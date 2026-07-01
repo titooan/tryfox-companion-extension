@@ -21,8 +21,8 @@ jobs:
         with:
           node-version: 20
 
-      - name: Run tests
-        run: npm test
+      - name: Install dependencies
+        run: npm ci
 
       - name: Resolve release version
         id: release_meta
@@ -34,10 +34,45 @@ jobs:
           fi
           echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
 
+      - name: Sync manifest version with release version
+        env:
+          RELEASE_VERSION: ${{ steps.release_meta.outputs.release_version }}
+        run: |
+          node -e '
+          const fs = require("node:fs");
+          const manifestPath = "manifest.json";
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          manifest.version = process.env.RELEASE_VERSION;
+          fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+          '
+
+      - name: Run tests
+        run: npm test
+
       - name: Build extension
         env:
           TRYFOX_EXTENSION_VERSION: ${{ steps.release_meta.outputs.release_version }}
         run: npm run build:ci
+
+      - name: Upload to AMO
+        env:
+          AMO_ISSUER: ${{ secrets.AMO_ISSUER }}
+          AMO_SECRET: ${{ secrets.AMO_SECRET }}
+          RELEASE_VERSION: ${{ steps.release_meta.outputs.release_version }}
+        run: |
+          stage_dir="$(mktemp -d)"
+          trap 'rm -rf "$stage_dir"' EXIT
+
+          cp manifest.json "$stage_dir/"
+          cp -R src popup scanner settings icons "$stage_dir/"
+          cp LICENSE README.md "$stage_dir/"
+
+          npx web-ext sign \
+            --source-dir "$stage_dir" \
+            --artifacts-dir signed-artifacts \
+            --channel listed \
+            --api-key "$AMO_ISSUER" \
+            --api-secret "$AMO_SECRET"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2

@@ -1,4 +1,14 @@
+<p align="center">
+  <img src="icons/tryfox.png" alt="TryFox Companion icon" width="160">
+</p>
+
 # TryFox Companion Extension
+
+<p align="center">
+  <a href="https://addons.mozilla.org/en-GB/firefox/addon/tryfox-companion/">
+    <img src="icons/getaddon.svg" alt="Get the TryFox Companion add-on on AMO" width="200">
+  </a>
+</p>
 
 TryFox Companion Extension is a Firefox add-on that turns supported Treeherder job URLs into `tryfox://` deep links and renders them as QR codes directly in the browser popup. It can also send a supported Try revision or author query to the TryFox Android app over the local network after scanning a QR code shown by Android.
 
@@ -130,4 +140,5 @@ The repository now includes GitHub Actions workflows that:
 
 - Run the URL translation tests on pushes and pull requests
 - Build the `.xpi` artifact in CI
-- Publish the built unsigned extension artifact on version-tagged releases
+- Publish the add-on to AMO on releases using the `AMO_ISSUER` and `AMO_SECRET` repository secrets
+- Publish the built unsigned extension artifact on GitHub releases
